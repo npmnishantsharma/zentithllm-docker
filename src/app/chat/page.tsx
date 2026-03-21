@@ -15,7 +15,9 @@ import {
   Share,
   LayoutDashboard,
   User,
-  Crown
+  Crown,
+  Paperclip,
+  Mic
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -79,6 +81,7 @@ export default function ChatPage() {
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -90,6 +93,15 @@ export default function ChatPage() {
     setMessages(MOCK_MESSAGES[activeConvId] || []);
     fetchAiSuggestions(MOCK_MESSAGES[activeConvId] || []);
   }, [activeConvId]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      textarea.style.height = 'auto';
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    }
+  }, [inputValue]);
 
   const fetchAiSuggestions = async (history: Message[]) => {
     if (history.length === 0) {
@@ -324,11 +336,9 @@ export default function ChatPage() {
             )}
 
             {/* Input Bar */}
-            <div className="relative flex items-end gap-2 bg-muted/50 border border-border/50 rounded-2xl p-2 pl-4 focus-within:border-border/80 transition-all shadow-sm">
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:bg-muted shrink-0">
-                <Plus size={20} />
-              </Button>
+            <div className="relative flex flex-col bg-muted/30 border border-border/50 rounded-2xl overflow-hidden focus-within:border-border/80 transition-all shadow-sm focus-within:ring-1 focus-within:ring-border/20">
               <textarea
+                ref={textareaRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {
@@ -339,20 +349,33 @@ export default function ChatPage() {
                 }}
                 rows={1}
                 placeholder="Message Nexus AI..."
-                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[40px] py-2 resize-none placeholder:text-muted-foreground/50 focus:outline-none"
+                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[56px] py-4 px-4 resize-none placeholder:text-muted-foreground/50 focus:outline-none custom-scrollbar"
               />
-              <Button 
-                onClick={() => handleSendMessage()}
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "h-8 w-8 transition-all rounded-lg shrink-0",
-                  inputValue.trim() ? "bg-foreground text-background hover:bg-foreground/90" : "text-muted-foreground/30"
-                )}
-                disabled={!inputValue.trim()}
-              >
-                <ArrowUp size={18} strokeWidth={2.5} />
-              </Button>
+              <div className="flex items-center justify-between px-2 pb-2">
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:bg-muted rounded-lg">
+                    <Plus size={18} />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:bg-muted rounded-lg">
+                    <Paperclip size={18} />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:bg-muted rounded-lg">
+                    <Mic size={18} />
+                  </Button>
+                </div>
+                <Button 
+                  onClick={() => handleSendMessage()}
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "h-8 w-8 transition-all rounded-lg shrink-0",
+                    inputValue.trim() ? "bg-foreground text-background hover:bg-foreground/90" : "text-muted-foreground/30"
+                  )}
+                  disabled={!inputValue.trim()}
+                >
+                  <ArrowUp size={18} strokeWidth={2.5} />
+                </Button>
+              </div>
             </div>
             <p className="text-[11px] text-center text-muted-foreground/50">
               Nexus AI can make mistakes. Check important info.
