@@ -17,7 +17,8 @@ import {
   Menu,
   X,
   Copy,
-  Check
+  Check,
+  RotateCcw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -58,12 +59,13 @@ const MOCK_MESSAGES: Record<string, Message[]> = {
 export default function ChatPage() {
   const isMobile = useIsMobile();
   const [activeConvId, setActiveConvId] = useState<string>('2');
-  const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES['2'] || []);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userData, setUserData] = useState<any>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [msgCopiedId, setMsgCopiedId] = useState<string | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -83,7 +85,8 @@ export default function ChatPage() {
         console.error("Failed to parse user data", e);
       }
     }
-  }, []);
+    setMessages(MOCK_MESSAGES[activeConvId] || []);
+  }, [activeConvId]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -92,33 +95,31 @@ export default function ChatPage() {
   }, [messages, isTyping]);
 
   useEffect(() => {
-    setMessages(MOCK_MESSAGES[activeConvId] || []);
-    if (isMobile) setSidebarOpen(false);
-  }, [activeConvId, isMobile]);
-
-  useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
     }
   }, [inputValue]);
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim()) return;
+  const handleSendMessage = async (customContent?: string) => {
+    const content = customContent || inputValue;
+    if (!content.trim()) return;
 
-    const content = inputValue;
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      senderName: userData?.displayName || 'You',
-      content,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
+    if (!customContent) {
+      const newMessage: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        senderName: userData?.displayName || 'You',
+        content,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages(prev => [...prev, newMessage]);
+      setInputValue('');
+    }
 
-    setMessages(prev => [...prev, newMessage]);
-    setInputValue('');
     setIsTyping(true);
 
+    // Mock API delay
     setTimeout(() => {
       setIsTyping(false);
       const reply: Message = {
@@ -133,10 +134,27 @@ export default function ChatPage() {
     }, 1500);
   };
 
-  const copyToClipboard = (text: string, id: string) => {
+  const handleRegenerate = () => {
+    if (messages.length === 0 || isTyping) return;
+    
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role === 'assistant') {
+      // Remove last assistant message
+      setMessages(prev => prev.slice(0, -1));
+      // Trigger new response
+      handleSendMessage(messages[messages.length - 2]?.content || "Please regenerate that.");
+    }
+  };
+
+  const copyToClipboard = (text: string, id: string, isFullMsg = false) => {
     navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
+    if (isFullMsg) {
+      setMsgCopiedId(id);
+      setTimeout(() => setMsgCopiedId(null), 2000);
+    } else {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
   };
 
   const userDisplayName = userData?.displayName || "Developer";
@@ -162,7 +180,7 @@ export default function ChatPage() {
           <Button 
             variant="ghost" 
             className="flex-1 mr-2 justify-start gap-3 hover:bg-white/5 text-sm font-medium h-11 px-3 rounded-lg"
-            onClick={() => {}}
+            onClick={() => setMessages([])}
           >
             <div className="h-6 w-6 rounded-full bg-white/10 flex items-center justify-center shrink-0">
               <Plus size={14} className="text-white" />
@@ -252,8 +270,10 @@ export default function ChatPage() {
                 <h1 className="text-xl sm:text-2xl font-semibold text-white/90 mb-2">How can I help you today?</h1>
               </div>
             ) : (
-              messages.map((msg) => {
+              messages.map((msg, index) => {
                 const isAI = msg.role === 'assistant';
+                const isLast = index === messages.length - 1;
+
                 return (
                   <div key={msg.id} className="animate-fade-in group">
                     <div className="flex items-start gap-3 sm:gap-4">
@@ -329,10 +349,34 @@ export default function ChatPage() {
                         </div>
 
                         <div className="mt-3 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white"
+                            onClick={() => copyToClipboard(msg.content, msg.id, true)}
+                          >
+                            {msgCopiedId === msg.id ? <Check size={13} /> : <Copy size={13} />}
+                          </Button>
+                          {isAI && isLast && (
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white"
+                              onClick={handleRegenerate}
+                              disabled={isTyping}
+                            >
+                              <RotateCcw size={13} className={cn(isTyping && "animate-spin")} />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white">
                             <Share2 size={13} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-destructive">
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-destructive"
+                            onClick={() => setMessages(prev => prev.filter(m => m.id !== msg.id))}
+                          >
                             <Trash2 size={13} />
                           </Button>
                         </div>
@@ -389,10 +433,10 @@ export default function ChatPage() {
                 
                 <Button 
                   onClick={() => handleSendMessage()}
-                  disabled={!inputValue.trim()}
+                  disabled={!inputValue.trim() || isTyping}
                   className={cn(
                     "h-8 w-8 rounded-lg p-0 transition-all",
-                    inputValue.trim() 
+                    inputValue.trim() && !isTyping
                       ? "bg-white text-black hover:bg-white/90" 
                       : "bg-white/10 text-white/20"
                   )}
