@@ -15,13 +15,19 @@ import {
   Settings,
   User,
   Menu,
-  X
+  X,
+  Copy,
+  Check
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 type Message = {
   id: string;
@@ -42,7 +48,7 @@ const INITIAL_CONVERSATIONS = [
 
 const MOCK_MESSAGES: Record<string, Message[]> = {
   '2': [
-    { id: 'm1', role: 'assistant', senderName: 'Nexus AI', content: "Hello! I've analyzed your current CI/CD pipeline. How can I help you optimize the Discord webhook triggers today?", timestamp: '10:24 AM', avatar: 'https://picsum.photos/seed/ai/100/100' },
+    { id: 'm1', role: 'assistant', senderName: 'Nexus AI', content: "Hello! I've analyzed your current CI/CD pipeline. How can I help you optimize the Discord webhook triggers today? Here's an example of a webhook structure:\n\n```json\n{\n  \"content\": \"Build Success!\",\n  \"embeds\": [{\n    \"title\": \"Android App\",\n    \"description\": \"Build #45 passed gracefully.\",\n    \"color\": 3066993\n  }]\n}\n```", timestamp: '10:24 AM', avatar: 'https://picsum.photos/seed/ai/100/100' },
     { id: 'm2', role: 'user', senderName: 'You', content: "Let's review the triggers. We need more granular build data in the notifications.", timestamp: '10:25 AM' },
   ],
 };
@@ -55,11 +61,11 @@ export default function ChatPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userData, setUserData] = useState<any>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Default sidebar state based on device
   useEffect(() => {
     if (isMobile !== undefined) {
       setSidebarOpen(!isMobile);
@@ -117,12 +123,18 @@ export default function ChatPage() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         senderName: 'Nexus AI',
-        content: "I've processed that request. The webhook payload has been updated to include granular telemetry for build status, duration, and error logs.",
+        content: "I've processed that request. The webhook payload has been updated to include granular telemetry for build status, duration, and error logs.\n\n### Updated Configuration\n\n```yaml\nwebhook:\n  url: \"${DISCORD_WEBHOOK_URL}\"\n  triggers:\n    - build_status\n    - duration_metrics\n    - error_logs\n```",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         avatar: 'https://picsum.photos/seed/ai/100/100'
       };
       setMessages(prev => [...prev, reply]);
     }, 1500);
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   const userDisplayName = userData?.displayName || "Developer";
@@ -132,7 +144,6 @@ export default function ChatPage() {
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground font-body dark">
       
-      {/* Mobile Overlay */}
       {isMobile && sidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/60 z-40 animate-in fade-in duration-200"
@@ -140,7 +151,6 @@ export default function ChatPage() {
         />
       )}
 
-      {/* Sidebar */}
       <aside className={cn(
         "bg-[#0d0d0d] border-r border-white/5 transition-all duration-300 flex flex-col shrink-0 z-50",
         isMobile ? "fixed inset-y-0 left-0" : "relative",
@@ -210,10 +220,8 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      {/* Main Chat Area */}
       <main className="flex-1 flex flex-col min-w-0 bg-background relative">
         
-        {/* Header / Mobile Toggle */}
         <header className="h-14 flex items-center px-4 border-b border-white/5 bg-background/50 backdrop-blur-md sticky top-0 z-30">
           <div className="flex items-center gap-3">
             {!sidebarOpen && (
@@ -229,7 +237,6 @@ export default function ChatPage() {
           </div>
         </header>
 
-        {/* Message Feed */}
         <div 
           ref={scrollRef}
           className="flex-1 overflow-y-auto custom-scrollbar"
@@ -269,9 +276,55 @@ export default function ChatPage() {
                             </span>
                           )}
                         </div>
-                        <div className="text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words">
-                          {msg.content}
+                        
+                        <div className="text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words markdown-content">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code({ node, inline, className, children, ...props }: any) {
+                                const match = /language-(\w+)/.exec(className || '');
+                                return !inline && match ? (
+                                  <div className="relative group/code my-4">
+                                    <div className="flex items-center justify-between px-4 py-2 bg-[#1e1e1e] rounded-t-lg border-x border-t border-white/5">
+                                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{match[1]}</span>
+                                      <Button 
+                                        variant="ghost" 
+                                        size="icon" 
+                                        className="h-6 w-6 text-white/40 hover:text-white"
+                                        onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), msg.id)}
+                                      >
+                                        {copiedId === msg.id ? <Check size={12} /> : <Copy size={12} />}
+                                      </Button>
+                                    </div>
+                                    <SyntaxHighlighter
+                                      style={vscDarkPlus}
+                                      language={match[1]}
+                                      PreTag="div"
+                                      className="!m-0 !rounded-b-lg !bg-[#0d0d0d] !border-x !border-b !border-white/5 !p-4 custom-scrollbar"
+                                      {...props}
+                                    >
+                                      {String(children).replace(/\n$/, '')}
+                                    </SyntaxHighlighter>
+                                  </div>
+                                ) : (
+                                  <code className={cn("bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-white", className)} {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              },
+                              p: ({ children }) => <p className="mb-4 last:mb-0">{children}</p>,
+                              ul: ({ children }) => <ul className="list-disc pl-6 mb-4 space-y-1">{children}</ul>,
+                              ol: ({ children }) => <ol className="list-decimal pl-6 mb-4 space-y-1">{children}</ol>,
+                              h1: ({ children }) => <h1 className="text-xl font-bold mb-4 mt-6">{children}</h1>,
+                              h2: ({ children }) => <h2 className="text-lg font-bold mb-3 mt-5">{children}</h2>,
+                              h3: ({ children }) => <h3 className="text-md font-bold mb-2 mt-4">{children}</h3>,
+                              blockquote: ({ children }) => <blockquote className="border-l-4 border-white/10 pl-4 italic my-4">{children}</blockquote>,
+                            }}
+                          >
+                            {msg.content}
+                          </ReactMarkdown>
                         </div>
+
                         <div className="mt-3 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white">
                             <Share2 size={13} />
@@ -299,7 +352,6 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Input Area */}
         <div className="p-4 sm:pb-8 bg-gradient-to-t from-background via-background to-transparent z-20">
           <div className="max-w-3xl mx-auto relative">
             <div className="relative flex flex-col bg-[#2f2f2f] border border-white/5 rounded-2xl overflow-hidden focus-within:border-white/20 transition-all shadow-xl">
