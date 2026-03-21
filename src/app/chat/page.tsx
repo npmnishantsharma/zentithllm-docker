@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { 
-  Search, 
-  Settings, 
   Plus, 
   MessageSquare, 
   MoreVertical,
@@ -14,13 +12,13 @@ import {
   Send,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
   User
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
-import { aiMessageContextAssistant, type AiMessageContextAssistantOutput } from '@/ai/flows/ai-message-context-assistant-flow';
 
 type Message = {
   id: string;
@@ -126,16 +124,18 @@ export default function ChatPage() {
       
       {/* Sidebar */}
       <aside className={cn(
-        "bg-black/95 border-r border-white/5 transition-all duration-300 flex flex-col shrink-0",
+        "bg-[#0d0d0d] border-r border-white/5 transition-all duration-300 flex flex-col shrink-0",
         sidebarOpen ? "w-72" : "w-0 overflow-hidden border-none"
       )}>
         <div className="p-4 flex items-center justify-between">
           <Button 
-            variant="outline" 
-            className="flex-1 mr-2 justify-start gap-2 border-white/10 hover:bg-white/5 text-xs font-medium h-10"
+            variant="ghost" 
+            className="flex-1 mr-2 justify-start gap-3 hover:bg-white/5 text-sm font-medium h-11 px-3 rounded-lg"
             onClick={() => {}}
           >
-            <Plus size={16} />
+            <div className="h-6 w-6 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+              <Plus size={14} className="text-white" />
+            </div>
             New Chat
           </Button>
           <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => setSidebarOpen(false)}>
@@ -151,7 +151,7 @@ export default function ChatPage() {
               
               return (
                 <div key={dateGroup} className="space-y-1">
-                  <h3 className="px-2 text-[11px] font-semibold text-white/30 uppercase tracking-wider mb-2">
+                  <h3 className="px-3 text-[11px] font-bold text-white/30 uppercase tracking-widest mb-2">
                     {dateGroup}
                   </h3>
                   {groupConvs.map(conv => (
@@ -165,7 +165,6 @@ export default function ChatPage() {
                           : "text-white/60 hover:bg-white/5 hover:text-white"
                       )}
                     >
-                      <MessageSquare size={16} className="shrink-0 opacity-50" />
                       <span className="truncate flex-1">{conv.name}</span>
                       <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1">
                         <MoreVertical size={14} className="text-white/30" />
@@ -180,29 +179,21 @@ export default function ChatPage() {
         
         {/* Profile Footer */}
         <div className="p-4 border-t border-white/5 mt-auto">
-          <div className="flex items-center gap-3 p-2 rounded-xl bg-white/5 border border-white/5">
-            <Avatar className="h-9 w-9 border border-white/10">
+          <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
+            <Avatar className="h-8 w-8 rounded-full border border-white/10">
               <AvatarImage src={userPhoto} />
-              <AvatarFallback><User size={18} /></AvatarFallback>
+              <AvatarFallback><User size={16} /></AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-bold truncate leading-none mb-1">{userDisplayName}</p>
-              <div 
-                className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider text-white inline-flex items-center"
-                style={{ background: userTag.color }}
-              >
-                {userTag.name}
-              </div>
+              <p className="text-sm font-medium truncate text-white/90">{userDisplayName}</p>
             </div>
-            <Button variant="ghost" size="icon" className="text-white/30">
-              <Settings size={16} />
-            </Button>
+            <Settings size={16} className="text-white/30 group-hover:text-white transition-colors" />
           </div>
         </div>
       </aside>
 
       {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col min-w-0 bg-[#0a0a0a] relative">
+      <main className="flex-1 flex flex-col min-w-0 bg-background relative">
         
         {/* Mobile / Closed Sidebar Toggle */}
         {!sidebarOpen && (
@@ -218,14 +209,13 @@ export default function ChatPage() {
           ref={scrollRef}
           className="flex-1 overflow-y-auto custom-scrollbar"
         >
-          <div className="max-w-3xl mx-auto px-6 py-10 space-y-8">
+          <div className="max-w-3xl mx-auto px-6 py-10 space-y-10">
             {messages.length === 0 ? (
-              <div className="h-[60vh] flex flex-col items-center justify-center text-center opacity-40">
-                <div className="h-16 w-16 rounded-3xl bg-white/5 flex items-center justify-center mb-6">
-                  <MessageSquare size={32} />
+              <div className="h-[60vh] flex flex-col items-center justify-center text-center">
+                <div className="h-12 w-12 rounded-full border border-white/10 flex items-center justify-center mb-6">
+                   <MessageSquare size={24} className="text-white/20" />
                 </div>
-                <h1 className="text-2xl font-bold mb-2">How can I help you?</h1>
-                <p className="text-sm max-w-sm">Start a conversation with Nexus AI to build, optimize, or research your next project.</p>
+                <h1 className="text-2xl font-semibold text-white/90 mb-2">How can I help you today?</h1>
               </div>
             ) : (
               messages.map((msg) => {
@@ -234,23 +224,33 @@ export default function ChatPage() {
                   <div key={msg.id} className="animate-fade-in group">
                     <div className="flex items-start gap-4">
                       <Avatar className={cn(
-                        "h-8 w-8 rounded-lg shrink-0",
-                        isAI ? "bg-primary border border-primary/20" : "bg-white/10 border border-white/10"
+                        "h-8 w-8 rounded-full shrink-0",
+                        isAI ? "bg-[#19c37d] text-white" : "bg-white/10"
                       )}>
                         <AvatarImage src={isAI ? msg.avatar : userPhoto} />
-                        <AvatarFallback>{isAI ? 'NX' : 'U'}</AvatarFallback>
+                        <AvatarFallback>{isAI ? 'AI' : 'U'}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0 pt-0.5">
-                        <p className="text-[13px] font-bold text-white/90 mb-1">{isAI ? 'Nexus AI' : userDisplayName}</p>
-                        <div className="text-[15px] leading-relaxed text-white/80 whitespace-pre-wrap">
+                        <p className="text-sm font-bold text-white mb-1">
+                          {isAI ? 'Nexus AI' : userDisplayName}
+                          {msg.role === 'user' && userTag && (
+                            <span 
+                              className="ml-2 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-white inline-flex items-center align-middle"
+                              style={{ background: userTag.color }}
+                            >
+                              {userTag.name}
+                            </span>
+                          )}
+                        </p>
+                        <div className="text-[15px] leading-7 text-white/90 whitespace-pre-wrap">
                           {msg.content}
                         </div>
-                        <div className="mt-3 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-white/30 hover:text-white">
-                            <Share2 size={12} />
+                        <div className="mt-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-white/30 hover:text-white">
+                            <Share2 size={14} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-white/30 hover:text-destructive">
-                            <Trash2 size={12} />
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-white/30 hover:text-destructive">
+                            <Trash2 size={14} />
                           </Button>
                         </div>
                       </div>
@@ -262,7 +262,7 @@ export default function ChatPage() {
 
             {isTyping && (
               <div className="flex items-start gap-4 animate-pulse">
-                <div className="h-8 w-8 rounded-lg bg-white/5 border border-white/10 shrink-0" />
+                <div className="h-8 w-8 rounded-full bg-[#19c37d] shrink-0" />
                 <div className="flex-1 pt-2 space-y-2">
                   <div className="h-3 w-24 bg-white/10 rounded" />
                   <div className="h-3 w-full bg-white/5 rounded" />
@@ -273,9 +273,9 @@ export default function ChatPage() {
         </div>
 
         {/* Input Area */}
-        <div className="p-4 pb-8">
+        <div className="p-4 pb-8 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-3xl mx-auto relative group">
-            <div className="relative flex flex-col bg-[#1a1a1a] border border-white/10 rounded-[26px] overflow-hidden focus-within:border-white/20 transition-all shadow-2xl">
+            <div className="relative flex flex-col bg-[#2f2f2f] border border-white/5 rounded-2xl overflow-hidden focus-within:border-white/20 transition-all shadow-xl">
               
               <textarea
                 ref={textareaRef}
@@ -289,21 +289,18 @@ export default function ChatPage() {
                 }}
                 rows={1}
                 placeholder="Message Nexus AI..."
-                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[52px] py-3.5 px-12 resize-none placeholder:text-white/20 focus:outline-none scrollbar-hide"
+                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[52px] py-3.5 px-4 resize-none placeholder:text-white/40 focus:outline-none scrollbar-hide"
               />
 
-              <div className="absolute left-3 top-3">
-                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full text-white/30 hover:text-white hover:bg-white/5">
-                  <Plus size={18} />
-                </Button>
-              </div>
-              
               <div className="flex items-center justify-between px-3 pb-3">
-                <div className="flex items-center gap-1 ml-9">
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/20 hover:text-white">
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg">
+                    <Plus size={18} />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg">
                     <Paperclip size={16} />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/20 hover:text-white">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg">
                     <Mic size={16} />
                   </Button>
                 </div>
@@ -312,17 +309,17 @@ export default function ChatPage() {
                   onClick={() => handleSendMessage()}
                   disabled={!inputValue.trim()}
                   className={cn(
-                    "h-8 w-8 rounded-full p-0 transition-all",
+                    "h-8 w-8 rounded-lg p-0 transition-all",
                     inputValue.trim() 
                       ? "bg-white text-black hover:bg-white/90" 
-                      : "bg-white/5 text-white/20"
+                      : "bg-white/10 text-white/20"
                   )}
                 >
                   <Send size={16} />
                 </Button>
               </div>
             </div>
-            <p className="mt-2.5 text-[11px] text-center text-white/20 font-medium tracking-tight">
+            <p className="mt-3 text-[11px] text-center text-white/30 font-medium">
               Nexus AI can make mistakes. Check important info.
             </p>
           </div>
