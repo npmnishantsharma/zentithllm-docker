@@ -26,8 +26,10 @@ import {
   Users,
   UserCircle,
   Play,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useRouter } from "next/navigation";
 
 const NAV_ITEMS = [
   { id: "general", label: "General", icon: Settings },
@@ -47,6 +49,14 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = React.useState("general");
+  const router = useRouter();
+
+  const handleLogout = () => {
+    localStorage.removeItem('nexus_session_active');
+    localStorage.removeItem('nexus_user_data');
+    router.push('/login');
+    onOpenChange(false);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -80,7 +90,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <h2 className="text-xl font-semibold text-white mb-6">General</h2>
 
               <div className="space-y-6">
-                {/* Appearance */}
                 <div className="flex items-center justify-between py-1">
                   <span className="text-sm font-medium text-white/90">Appearance</span>
                   <Select defaultValue="system">
@@ -97,7 +106,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
                 <div className="h-px bg-white/5" />
 
-                {/* Accent Color */}
                 <div className="flex items-center justify-between py-1">
                   <span className="text-sm font-medium text-white/90">Accent color</span>
                   <Select defaultValue="default">
@@ -117,7 +125,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
                 <div className="h-px bg-white/5" />
 
-                {/* Language */}
                 <div className="flex items-center justify-between py-1">
                   <span className="text-sm font-medium text-white/90">Language</span>
                   <Select defaultValue="auto">
@@ -134,7 +141,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
                 <div className="h-px bg-white/5" />
 
-                {/* Spoken Language */}
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-white/90">Spoken language</span>
@@ -156,7 +162,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
                 <div className="h-px bg-white/5" />
 
-                {/* Voice */}
                 <div className="flex items-center justify-between py-1">
                   <span className="text-sm font-medium text-white/90">Voice</span>
                   <div className="flex items-center gap-4">
@@ -179,7 +184,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
                 <div className="h-px bg-white/5" />
 
-                {/* Separate Voice */}
                 <div className="flex items-center justify-between gap-8 py-1">
                   <div className="flex-1 space-y-1">
                     <span className="text-sm font-medium text-white/90">Separate Voice</span>
@@ -192,7 +196,94 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               </div>
             </div>
           )}
-          {activeTab !== "general" && (
+
+          {activeTab === "security" && (
+            <div className="space-y-8 animate-in fade-in duration-300">
+              <h2 className="text-xl font-semibold text-white mb-6">Security</h2>
+
+              <div className="space-y-6">
+                {/* Password */}
+                <div className="flex items-center justify-between py-1 group cursor-pointer">
+                  <span className="text-sm font-medium text-white/90">Password</span>
+                  <div className="flex items-center gap-1 text-white/30 group-hover:text-white transition-colors">
+                    <span className="text-sm">Add</span>
+                    <ChevronRight size={16} />
+                  </div>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Passkeys */}
+                <div className="flex items-center justify-between py-1 group cursor-pointer gap-8">
+                  <div className="flex-1 space-y-1">
+                    <span className="text-sm font-medium text-white/90">Passkeys</span>
+                    <p className="text-xs text-white/30 leading-relaxed">
+                      Passkeys are secure and protect your account with multi-factor authentication. They don't require any extra steps.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 text-white/30 group-hover:text-white transition-colors shrink-0">
+                    <span className="text-sm">Add</span>
+                    <ChevronRight size={16} />
+                  </div>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* MFA Header */}
+                <h3 className="text-md font-semibold text-white/90 pt-2">Multi-factor authentication (MFA)</h3>
+
+                {/* Authenticator App */}
+                <div className="flex items-center justify-between gap-8 py-1">
+                  <div className="flex-1 space-y-1">
+                    <span className="text-sm font-medium text-white/90">Authenticator app</span>
+                    <p className="text-xs text-white/30 leading-relaxed">
+                      Use one-time codes from an authenticator app.
+                    </p>
+                  </div>
+                  <Switch className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" />
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Text Message */}
+                <div className="flex items-center justify-between gap-8 py-1">
+                  <div className="flex-1 space-y-1">
+                    <span className="text-sm font-medium text-white/90">Text message</span>
+                    <p className="text-xs text-white/30 leading-relaxed">
+                      Get 6-digit verification codes by SMS or WhatsApp based on your country code
+                    </p>
+                  </div>
+                  <Switch className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" />
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Trusted Devices */}
+                <div className="space-y-1 py-1">
+                  <span className="text-sm font-medium text-white/90">Trusted Devices</span>
+                  <p className="text-xs text-white/30 leading-relaxed">
+                    When you sign in on another device, it will be added here and can automatically receive device prompts for signing in.
+                  </p>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Logout */}
+                <div className="flex items-center justify-between py-4">
+                  <span className="text-sm font-medium text-white/90">Log out of this device</span>
+                  <Button 
+                    onClick={handleLogout}
+                    variant="ghost" 
+                    className="bg-white/5 hover:bg-white/10 text-white rounded-2xl h-10 px-6 font-medium"
+                  >
+                    Log out
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab !== "general" && activeTab !== "security" && (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-30">
               <p className="text-sm font-medium">Settings for {activeTab} coming soon.</p>
             </div>
