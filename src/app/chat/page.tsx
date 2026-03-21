@@ -14,12 +14,14 @@ import {
   ArrowUp,
   Share,
   LayoutDashboard,
-  User
+  User,
+  Crown
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { aiMessageContextAssistant, type AiMessageContextAssistantOutput } from '@/ai/flows/ai-message-context-assistant-flow';
 
@@ -54,6 +56,18 @@ const MOCK_MESSAGES: Record<string, Message[]> = {
     { id: 'm3', role: 'user', senderName: 'You', content: "That looks solid. Can we also include the build duration in the message?", timestamp: '10:25 AM' },
     { id: 'm4', role: 'assistant', senderName: 'Nexus AI', content: "Certainly. I'll update the script to capture the start and end times, then calculate the delta for the notification payload.", timestamp: '10:26 AM', avatar: 'https://picsum.photos/seed/ai/100/100' },
   ],
+};
+
+const AUTH_USER = {
+  displayName: "Nishant Sharma",
+  username: "nishant",
+  photoURL: "https://res.cloudinary.com/dtywxosgx/image/upload/v1764086999/profile-pictures/g7sujspn1cmdso0v1bfr.jpg",
+  role: "admin",
+  userTag: {
+    name: "Owner",
+    emoji: "👑",
+    color: "linear-gradient(to right, #11998e, #38ef7d)"
+  }
 };
 
 export default function ChatPage() {
@@ -127,13 +141,11 @@ export default function ChatPage() {
     }, 1200);
   };
 
-  const activeConv = INITIAL_CONVERSATIONS.find(c => c.id === activeConvId);
-
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground font-body dark">
       
-      {/* Sidebar - ChatGPT Style */}
-      <aside className="w-64 flex flex-col bg-sidebar border-none shrink-0">
+      {/* Sidebar */}
+      <aside className="w-64 flex flex-col bg-sidebar border-none shrink-0 border-r border-border/10">
         <div className="p-3">
           <Button variant="ghost" className="w-full justify-start gap-2 hover:bg-sidebar-accent rounded-lg text-sm font-medium">
             <SquarePen size={18} />
@@ -144,9 +156,9 @@ export default function ChatPage() {
         <div className="px-3 mb-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input 
+            <input 
               placeholder="Search chats" 
-              className="h-9 pl-9 bg-transparent border-none focus-visible:ring-0 text-sm placeholder:text-muted-foreground/60"
+              className="h-9 w-full pl-9 bg-transparent border-none focus-visible:ring-0 text-sm placeholder:text-muted-foreground/60 focus:outline-none"
             />
           </div>
         </div>
@@ -170,22 +182,40 @@ export default function ChatPage() {
           </div>
         </ScrollArea>
 
-        {/* Sidebar Footer */}
-        <div className="p-3 border-none">
-          <Button variant="ghost" className="w-full justify-start gap-3 hover:bg-sidebar-accent rounded-lg p-2">
-            <Avatar className="h-6 w-6 rounded-full">
-              <AvatarImage src="https://picsum.photos/seed/user/100/100" />
-              <AvatarFallback><User size={14} /></AvatarFallback>
-            </Avatar>
-            <span className="text-sm font-medium truncate">Nishant Sharma</span>
-          </Button>
+        {/* Sidebar Footer - Authenticated User Profile */}
+        <div className="p-3 border-t border-border/10">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-sidebar-accent transition-colors cursor-pointer group">
+              <Avatar className="h-9 w-9 border border-border/20">
+                <AvatarImage src={AUTH_USER.photoURL} />
+                <AvatarFallback className="bg-primary/10 text-primary">{AUTH_USER.displayName.charAt(0)}</AvatarFallback>
+              </Avatar>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 overflow-hidden">
+                  <span className="text-sm font-semibold truncate text-foreground leading-tight">
+                    {AUTH_USER.displayName}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <div 
+                    className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-white flex items-center gap-1"
+                    style={{ background: AUTH_USER.userTag.color }}
+                  >
+                    <span>{AUTH_USER.userTag.emoji}</span>
+                    {AUTH_USER.userTag.name}
+                  </div>
+                </div>
+              </div>
+              <Settings size={14} className="text-muted-foreground group-hover:text-foreground transition-colors" />
+            </div>
+          </div>
         </div>
       </aside>
 
       {/* Main Area */}
       <main className="flex-1 flex flex-col min-w-0 bg-background relative">
         {/* Header */}
-        <header className="h-14 flex items-center px-4 justify-between shrink-0">
+        <header className="h-14 flex items-center px-4 justify-between shrink-0 border-b border-border/5">
           <div className="flex items-center gap-1 group cursor-pointer hover:bg-muted/50 px-2 py-1 rounded-lg transition-colors">
             <h2 className="text-sm font-semibold">NexusLLM</h2>
             <ChevronDown size={14} className="text-muted-foreground" />
@@ -221,7 +251,7 @@ export default function ChatPage() {
                     <div className="flex items-start gap-4">
                       <div className={cn(
                         "h-8 w-8 rounded-full shrink-0 flex items-center justify-center overflow-hidden border",
-                        isAI ? "bg-background" : "bg-muted"
+                        isAI ? "bg-background" : "bg-muted border-none"
                       )}>
                         {isAI ? (
                           <Avatar className="h-full w-full">
@@ -229,12 +259,23 @@ export default function ChatPage() {
                             <AvatarFallback>AI</AvatarFallback>
                           </Avatar>
                         ) : (
-                          <User size={16} className="text-muted-foreground" />
+                          <Avatar className="h-full w-full">
+                            <AvatarImage src={AUTH_USER.photoURL} />
+                            <AvatarFallback><User size={16} /></AvatarFallback>
+                          </Avatar>
                         )}
                       </div>
                       <div className="flex-1 min-w-0 pt-1">
-                        <div className="font-bold text-sm mb-1">
-                          {isAI ? 'Nexus AI' : 'You'}
+                        <div className="font-bold text-sm mb-1 flex items-center gap-2">
+                          {isAI ? 'Nexus AI' : AUTH_USER.displayName}
+                          {!isAI && (
+                            <span 
+                              className="text-[8px] px-1 py-0.2 rounded-full font-bold text-white uppercase tracking-tighter scale-90 origin-left"
+                              style={{ background: AUTH_USER.userTag.color }}
+                            >
+                              {AUTH_USER.userTag.name}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[15px] leading-relaxed text-foreground whitespace-pre-wrap">
                           {msg.content}
@@ -298,7 +339,7 @@ export default function ChatPage() {
                 }}
                 rows={1}
                 placeholder="Message Nexus AI..."
-                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[40px] py-2 resize-none placeholder:text-muted-foreground/50"
+                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[40px] py-2 resize-none placeholder:text-muted-foreground/50 focus:outline-none"
               />
               <Button 
                 onClick={() => handleSendMessage()}
