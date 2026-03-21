@@ -46,8 +46,6 @@ export default function LoginPage() {
             'NexusLLMAuthorize', 
             `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
           );
-        } else {
-          console.warn('No authorize_url provided in session response.');
         }
 
         // Step 2: Listen for the authorized status via the proxy stream
@@ -57,7 +55,6 @@ export default function LoginPage() {
         source.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log('Handshake Stream Update:', data);
 
             if (data.status === 'authorized' && data.code) {
               setAuthStatus('Identity authorized! Finalizing handshake...');
@@ -66,8 +63,12 @@ export default function LoginPage() {
               const userInfoResult = await getUserInfoWithCode(data.code);
               
               if (userInfoResult.success) {
-                setAuthStatus(`Verified: ${userInfoResult.data.name || 'Developer'}`);
+                setAuthStatus(`Verified: ${userInfoResult.data.user?.displayName || 'Developer'}`);
                 
+                // Persist session state for the root redirector
+                localStorage.setItem('nexus_session_active', 'true');
+                localStorage.setItem('nexus_user_data', JSON.stringify(userInfoResult.data.user));
+
                 toast({
                   title: "Handshake Successful",
                   description: "Synchronized with NexusLLM. Redirecting to workspace.",
@@ -95,7 +96,6 @@ export default function LoginPage() {
               setAuthStatus(`Uplink Status: ${data.status || 'Waiting for user...'}`);
             }
           } catch (e: any) {
-            console.error('Error during handshake stream processing:', e);
             source.close();
             setIsLoading(false);
             setIsSuccess(false);
@@ -108,15 +108,12 @@ export default function LoginPage() {
           }
         };
 
-        source.onerror = (err) => {
-          console.error('Handshake EventSource failed:', err);
+        source.onerror = () => {
           source.close();
-          // We don't necessarily stop loading here because the user might still be authorizing in the popup
-          // However, for UX we show a toast.
           toast({
             variant: "destructive",
             title: "Stream Interrupted",
-            description: "Connection to auth server lost. Still waiting for authorization signal.",
+            description: "Connection to auth server lost.",
           });
         };
 
@@ -147,7 +144,7 @@ export default function LoginPage() {
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-primary shadow-[0_0_15px_rgba(255,255,255,0.05)]">
             <LayoutDashboard size={28} />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-primary">DevCom Workspace</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-primary font-headline">DevCom Workspace</h1>
           <p className="text-sm text-muted-foreground mt-2">Initialize your developer cluster node</p>
         </div>
 
@@ -181,12 +178,6 @@ export default function LoginPage() {
                     </span>
                     {authStatus}
                   </div>
-                  {isSuccess && !isLoading && (
-                    <p className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
-                      <ExternalLink size={10} />
-                      Popup blocked? Check your browser settings.
-                    </p>
-                  )}
                 </div>
               )}
             </div>
