@@ -1,9 +1,7 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Terminal, Github, Cpu, Sparkles } from 'lucide-react';
+import { Cpu, Sparkles } from 'lucide-react';
 
 export default function LoginPage() {
   return (
@@ -23,63 +21,36 @@ export default function LoginPage() {
 
         <Card className="border-border bg-[#2b2d30] shadow-2xl rounded-sm overflow-hidden">
           <div className="h-1 bg-primary w-full" />
-          <CardHeader className="space-y-1">
-            <CardTitle className="text-lg font-bold">Sign In</CardTitle>
+          <CardHeader className="space-y-1 text-center">
+            <CardTitle className="text-lg font-bold">Secure Gateway</CardTitle>
             <CardDescription className="text-[10px] font-code uppercase tracking-widest opacity-40">
               node_access_v2.0
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email" className="text-xs font-code uppercase opacity-60">Credentials</Label>
-              <Input 
-                id="email" 
-                placeholder="identity@devcom.io" 
-                type="text" 
-                className="bg-[#1e1f22] border-border focus:ring-primary/40 rounded-sm font-code text-sm"
-              />
-            </div>
-            <div className="space-y-2">
-              <Input 
-                id="password" 
-                placeholder="••••••••"
-                type="password" 
-                className="bg-[#1e1f22] border-border focus:ring-primary/40 rounded-sm font-code text-sm"
-              />
-            </div>
-            <Button className="w-full bg-primary hover:bg-primary/90 text-white rounded-sm mt-2 transition-all font-bold" asChild>
-              <Link href="/chat">Establish Connection</Link>
-            </Button>
-            
-            <div className="relative my-4">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-border"></span>
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase font-code">
-                <span className="bg-[#2b2d30] px-2 text-muted-foreground/60">External Identity</span>
-              </div>
-            </div>
-
-            <div className="grid gap-2">
-              <Button variant="outline" className="w-full border-border bg-transparent hover:bg-primary/10 hover:text-primary hover:border-primary/50 text-foreground rounded-sm font-code text-xs transition-all group" asChild>
+          <CardContent className="py-6">
+            <div className="space-y-4">
+              <p className="text-[11px] text-center text-muted-foreground font-code leading-relaxed">
+                Connect your neural identity via NexusLLM to access the dev cluster and encrypted communication channels.
+              </p>
+              
+              <Button 
+                className="w-full bg-primary hover:bg-primary/90 text-white rounded-sm h-12 transition-all font-bold group shadow-[0_0_15px_rgba(59,130,246,0.2)]" 
+                asChild
+              >
                 <Link href="/chat">
-                  <Sparkles className="mr-2 h-4 w-4 text-primary group-hover:animate-pulse" />
+                  <Sparkles className="mr-2 h-4 w-4 group-hover:animate-pulse" />
                   Sign in with NexusLLM
                 </Link>
               </Button>
-              <Button variant="outline" className="w-full border-border bg-transparent hover:bg-[#1e1f22] text-foreground rounded-sm font-code text-xs transition-colors">
-                <Github className="mr-2 h-4 w-4" />
-                GitHub Auth
-              </Button>
             </div>
           </CardContent>
-          <CardFooter className="flex flex-col space-y-4 pt-2">
-            <p className="text-center text-[11px] text-muted-foreground font-code">
-              New to the cluster?{' '}
-              <Link href="#" className="text-primary hover:underline">
-                Create Account
-              </Link>
-            </p>
+          <CardFooter className="flex flex-col space-y-2 pt-0 pb-6">
+            <div className="flex items-center justify-center gap-2 font-code">
+              <div className="h-1 w-1 rounded-full bg-green-500 animate-pulse"></div>
+              <span className="text-[8px] uppercase tracking-tighter text-muted-foreground/40 font-bold">
+                Identity Provider: ACTIVE
+              </span>
+            </div>
           </CardFooter>
         </Card>
 
