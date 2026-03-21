@@ -13,12 +13,15 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
-  User
+  User,
+  Menu,
+  X
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 type Message = {
   id: string;
@@ -45,6 +48,7 @@ const MOCK_MESSAGES: Record<string, Message[]> = {
 };
 
 export default function ChatPage() {
+  const isMobile = useIsMobile();
   const [activeConvId, setActiveConvId] = useState<string>('2');
   const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES['2'] || []);
   const [inputValue, setInputValue] = useState('');
@@ -54,6 +58,13 @@ export default function ChatPage() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Default sidebar state based on device
+  useEffect(() => {
+    if (isMobile !== undefined) {
+      setSidebarOpen(!isMobile);
+    }
+  }, [isMobile]);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('nexus_user_data');
@@ -74,9 +85,9 @@ export default function ChatPage() {
 
   useEffect(() => {
     setMessages(MOCK_MESSAGES[activeConvId] || []);
-  }, [activeConvId]);
+    if (isMobile) setSidebarOpen(false);
+  }, [activeConvId, isMobile]);
 
-  // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -100,7 +111,6 @@ export default function ChatPage() {
     setInputValue('');
     setIsTyping(true);
 
-    // Mock AI Response
     setTimeout(() => {
       setIsTyping(false);
       const reply: Message = {
@@ -122,9 +132,18 @@ export default function ChatPage() {
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground font-body dark">
       
+      {/* Mobile Overlay */}
+      {isMobile && sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-40 animate-in fade-in duration-200"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <aside className={cn(
-        "bg-[#0d0d0d] border-r border-white/5 transition-all duration-300 flex flex-col shrink-0",
+        "bg-[#0d0d0d] border-r border-white/5 transition-all duration-300 flex flex-col shrink-0 z-50",
+        isMobile ? "fixed inset-y-0 left-0" : "relative",
         sidebarOpen ? "w-72" : "w-0 overflow-hidden border-none"
       )}>
         <div className="p-4 flex items-center justify-between">
@@ -177,7 +196,6 @@ export default function ChatPage() {
           </div>
         </ScrollArea>
         
-        {/* Profile Footer */}
         <div className="p-4 border-t border-white/5 mt-auto">
           <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
             <Avatar className="h-8 w-8 rounded-full border border-white/10">
@@ -195,62 +213,71 @@ export default function ChatPage() {
       {/* Main Chat Area */}
       <main className="flex-1 flex flex-col min-w-0 bg-background relative">
         
-        {/* Mobile / Closed Sidebar Toggle */}
-        {!sidebarOpen && (
-          <div className="absolute left-4 top-4 z-10">
-            <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => setSidebarOpen(true)}>
-              <PanelLeftOpen size={20} />
-            </Button>
+        {/* Header / Mobile Toggle */}
+        <header className="h-14 flex items-center px-4 border-b border-white/5 bg-background/50 backdrop-blur-md sticky top-0 z-30">
+          <div className="flex items-center gap-3">
+            {!sidebarOpen && (
+              <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => setSidebarOpen(true)}>
+                <Menu size={20} />
+              </Button>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-white/90 truncate max-w-[150px] sm:max-w-none">
+                {INITIAL_CONVERSATIONS.find(c => c.id === activeConvId)?.name || "New Chat"}
+              </span>
+            </div>
           </div>
-        )}
+        </header>
 
         {/* Message Feed */}
         <div 
           ref={scrollRef}
           className="flex-1 overflow-y-auto custom-scrollbar"
         >
-          <div className="max-w-3xl mx-auto px-6 py-10 space-y-10">
+          <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-8 sm:space-y-10">
             {messages.length === 0 ? (
-              <div className="h-[60vh] flex flex-col items-center justify-center text-center">
+              <div className="h-[60vh] flex flex-col items-center justify-center text-center px-4">
                 <div className="h-12 w-12 rounded-full border border-white/10 flex items-center justify-center mb-6">
                    <MessageSquare size={24} className="text-white/20" />
                 </div>
-                <h1 className="text-2xl font-semibold text-white/90 mb-2">How can I help you today?</h1>
+                <h1 className="text-xl sm:text-2xl font-semibold text-white/90 mb-2">How can I help you today?</h1>
               </div>
             ) : (
               messages.map((msg) => {
                 const isAI = msg.role === 'assistant';
                 return (
                   <div key={msg.id} className="animate-fade-in group">
-                    <div className="flex items-start gap-4">
+                    <div className="flex items-start gap-3 sm:gap-4">
                       <Avatar className={cn(
-                        "h-8 w-8 rounded-full shrink-0",
+                        "h-7 w-7 sm:h-8 sm:w-8 rounded-full shrink-0",
                         isAI ? "bg-[#19c37d] text-white" : "bg-white/10"
                       )}>
                         <AvatarImage src={isAI ? msg.avatar : userPhoto} />
                         <AvatarFallback>{isAI ? 'AI' : 'U'}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0 pt-0.5">
-                        <p className="text-sm font-bold text-white mb-1">
-                          {isAI ? 'Nexus AI' : userDisplayName}
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <p className="text-xs sm:text-sm font-bold text-white">
+                            {isAI ? 'Nexus AI' : userDisplayName}
+                          </p>
                           {msg.role === 'user' && userTag && (
                             <span 
-                              className="ml-2 text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-white inline-flex items-center align-middle"
+                              className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-white inline-flex items-center align-middle"
                               style={{ background: userTag.color }}
                             >
                               {userTag.name}
                             </span>
                           )}
-                        </p>
-                        <div className="text-[15px] leading-7 text-white/90 whitespace-pre-wrap">
+                        </div>
+                        <div className="text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words">
                           {msg.content}
                         </div>
-                        <div className="mt-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-white/30 hover:text-white">
-                            <Share2 size={14} />
+                        <div className="mt-3 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white">
+                            <Share2 size={13} />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-white/30 hover:text-destructive">
-                            <Trash2 size={14} />
+                          <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-destructive">
+                            <Trash2 size={13} />
                           </Button>
                         </div>
                       </div>
@@ -261,10 +288,10 @@ export default function ChatPage() {
             )}
 
             {isTyping && (
-              <div className="flex items-start gap-4 animate-pulse">
-                <div className="h-8 w-8 rounded-full bg-[#19c37d] shrink-0" />
+              <div className="flex items-start gap-3 sm:gap-4 animate-pulse">
+                <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-[#19c37d] shrink-0" />
                 <div className="flex-1 pt-2 space-y-2">
-                  <div className="h-3 w-24 bg-white/10 rounded" />
+                  <div className="h-3 w-20 sm:w-24 bg-white/10 rounded" />
                   <div className="h-3 w-full bg-white/5 rounded" />
                 </div>
               </div>
@@ -273,8 +300,8 @@ export default function ChatPage() {
         </div>
 
         {/* Input Area */}
-        <div className="p-4 pb-8 bg-gradient-to-t from-background via-background to-transparent">
-          <div className="max-w-3xl mx-auto relative group">
+        <div className="p-4 sm:pb-8 bg-gradient-to-t from-background via-background to-transparent z-20">
+          <div className="max-w-3xl mx-auto relative">
             <div className="relative flex flex-col bg-[#2f2f2f] border border-white/5 rounded-2xl overflow-hidden focus-within:border-white/20 transition-all shadow-xl">
               
               <textarea
@@ -289,18 +316,18 @@ export default function ChatPage() {
                 }}
                 rows={1}
                 placeholder="Message Nexus AI..."
-                className="w-full bg-transparent border-none focus:ring-0 text-[15px] min-h-[52px] py-3.5 px-4 resize-none placeholder:text-white/40 focus:outline-none scrollbar-hide"
+                className="w-full bg-transparent border-none focus:ring-0 text-sm sm:text-[15px] min-h-[52px] py-3.5 px-4 resize-none placeholder:text-white/40 focus:outline-none scrollbar-hide"
               />
 
               <div className="flex items-center justify-between px-3 pb-3">
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-0.5 sm:gap-1">
                   <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg">
-                    <Plus size={18} />
+                    <Plus size={16} />
                   </Button>
                   <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg">
                     <Paperclip size={16} />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg">
+                  <Button variant="ghost" size="icon" className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/5 rounded-lg hidden sm:flex">
                     <Mic size={16} />
                   </Button>
                 </div>
@@ -319,7 +346,7 @@ export default function ChatPage() {
                 </Button>
               </div>
             </div>
-            <p className="mt-3 text-[11px] text-center text-white/30 font-medium">
+            <p className="mt-3 text-[10px] sm:text-[11px] text-center text-white/30 font-medium px-4">
               Nexus AI can make mistakes. Check important info.
             </p>
           </div>
