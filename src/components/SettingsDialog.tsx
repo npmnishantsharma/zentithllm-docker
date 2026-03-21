@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
+import { useToast } from "@/hooks/use-toast";
 
 const NAV_ITEMS = [
   { id: "general", label: "General", icon: Settings },
@@ -55,6 +56,9 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = React.useState("general");
   const [userData, setUserData] = React.useState<any>(null);
+  const [mfaEnabled, setMfaEnabled] = React.useState(false);
+  const [smsEnabled, setSmsEnabled] = React.useState(false);
+  const { toast } = useToast();
   const router = useRouter();
 
   React.useEffect(() => {
@@ -67,6 +71,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           console.error("Failed to parse user data", e);
         }
       }
+
+      // Load security preferences
+      setMfaEnabled(localStorage.getItem('nexus_mfa_enabled') === 'true');
+      setSmsEnabled(localStorage.getItem('nexus_sms_enabled') === 'true');
     }
   }, [open]);
 
@@ -75,6 +83,28 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     localStorage.removeItem('nexus_user_data');
     router.push('/login');
     onOpenChange(false);
+  };
+
+  const handleMfaToggle = (checked: boolean) => {
+    setMfaEnabled(checked);
+    localStorage.setItem('nexus_mfa_enabled', checked.toString());
+    toast({
+      title: checked ? "Authenticator App Enabled" : "Authenticator App Disabled",
+      description: checked 
+        ? "Your account is now protected with multi-factor authentication." 
+        : "One-time codes via app have been disabled.",
+    });
+  };
+
+  const handleSmsToggle = (checked: boolean) => {
+    setSmsEnabled(checked);
+    localStorage.setItem('nexus_sms_enabled', checked.toString());
+    toast({
+      title: checked ? "SMS Authentication Enabled" : "SMS Authentication Disabled",
+      description: checked 
+        ? "You will now receive verification codes via text message." 
+        : "Text message verification has been disabled.",
+    });
   };
 
   return (
@@ -259,7 +289,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                       Use one-time codes from an authenticator app like Google Authenticator or Microsoft Authenticator for maximum security.
                     </p>
                   </div>
-                  <Switch className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" />
+                  <Switch 
+                    checked={mfaEnabled}
+                    onCheckedChange={handleMfaToggle}
+                    className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" 
+                  />
                 </div>
 
                 <div className="h-px bg-white/5" />
@@ -272,7 +306,11 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                       Get 6-digit verification codes by SMS or WhatsApp based on your country code
                     </p>
                   </div>
-                  <Switch className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" />
+                  <Switch 
+                    checked={smsEnabled}
+                    onCheckedChange={handleSmsToggle}
+                    className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" 
+                  />
                 </div>
 
                 <div className="h-px bg-white/5" />
