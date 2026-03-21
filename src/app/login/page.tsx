@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from 'react';
@@ -5,31 +6,33 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sparkles, LayoutDashboard, Loader2 } from 'lucide-react';
+import { authenticateWithNexusLLM } from './actions';
+import { useToast } from '@/hooks/use-toast';
 
 export default function LoginPage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async () => {
     setIsLoading(true);
     try {
-      // Perform the authentication POST request as requested
-      const response = await fetch('https://zentithllm.nishantapps.in/api/auth/session', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          client_id: 'your_client_id',
-          client_secret: 'your_client_secret',
-        }),
-      });
-
-      // Navigate to chat after attempting sign in
-      // Note: We navigate even if the external endpoint is unreachable for prototyping purposes
-      router.push('/chat');
+      const result = await authenticateWithNexusLLM();
+      
+      if (result.success) {
+        router.push('/chat');
+      } else {
+        // Even if the request fails, we allow navigation for prototyping, 
+        // but we'll show a toast error if there's a real issue.
+        console.error('Login failed:', result.error);
+        toast({
+          variant: "destructive",
+          title: "Authentication Alert",
+          description: "Could not reach NexusLLM server, but proceeding to demo.",
+        });
+        router.push('/chat');
+      }
     } catch (error) {
-      // In a production app, handle errors here. For now, we continue to the chat.
       router.push('/chat');
     } finally {
       setIsLoading(false);
@@ -37,7 +40,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-background p-4 font-body dark">
+    <div className="relative flex min-h-screen items-center justify-center bg-background p-4 font-body dark text-foreground">
       <div className="w-full max-w-[400px] animate-fade-in">
         <div className="mb-8 flex flex-col items-center text-center">
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-primary">
