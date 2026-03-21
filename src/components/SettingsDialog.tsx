@@ -1,0 +1,204 @@
+"use client";
+
+import * as React from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import {
+  Settings,
+  Bell,
+  Paintbrush,
+  Grid,
+  Database,
+  Shield,
+  Users,
+  UserCircle,
+  Play,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+
+const NAV_ITEMS = [
+  { id: "general", label: "General", icon: Settings },
+  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "personalization", label: "Personalization", icon: Paintbrush },
+  { id: "apps", label: "Apps", icon: Grid },
+  { id: "data", label: "Data controls", icon: Database },
+  { id: "security", label: "Security", icon: Shield },
+  { id: "parental", label: "Parental controls", icon: Users },
+  { id: "account", label: "Account", icon: UserCircle },
+];
+
+interface SettingsDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
+  const [activeTab, setActiveTab] = React.useState("general");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl h-[600px] p-0 bg-[#171717] border-white/5 overflow-hidden flex flex-col sm:flex-row gap-0 rounded-3xl">
+        {/* Sidebar */}
+        <aside className="w-full sm:w-64 border-r border-white/5 bg-[#171717] p-4 flex flex-col gap-1 overflow-y-auto shrink-0">
+          <DialogHeader className="px-2 mb-4">
+            <DialogTitle className="sr-only">Settings</DialogTitle>
+          </DialogHeader>
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className={cn(
+                "flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-colors text-left",
+                activeTab === item.id
+                  ? "bg-white/10 text-white"
+                  : "text-white/50 hover:bg-white/5 hover:text-white"
+              )}
+            >
+              <item.icon size={18} />
+              <span className="font-medium">{item.label}</span>
+            </button>
+          ))}
+        </aside>
+
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto p-6 sm:p-8 bg-[#171717]">
+          {activeTab === "general" && (
+            <div className="space-y-8 animate-in fade-in duration-300">
+              <h2 className="text-xl font-semibold text-white mb-6">General</h2>
+
+              <div className="space-y-6">
+                {/* Appearance */}
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-sm font-medium text-white/90">Appearance</span>
+                  <Select defaultValue="system">
+                    <SelectTrigger className="w-40 bg-transparent border-none text-white/60 hover:text-white transition-colors focus:ring-0 px-0 justify-end gap-2 text-right">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#2f2f2f] border-white/10 text-white">
+                      <SelectItem value="system">System</SelectItem>
+                      <SelectItem value="dark">Dark</SelectItem>
+                      <SelectItem value="light">Light</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Accent Color */}
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-sm font-medium text-white/90">Accent color</span>
+                  <Select defaultValue="default">
+                    <SelectTrigger className="w-40 bg-transparent border-none text-white/60 hover:text-white transition-colors focus:ring-0 px-0 justify-end gap-2 text-right">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-white/40" />
+                        <SelectValue placeholder="Select" />
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#2f2f2f] border-white/10 text-white">
+                      <SelectItem value="default">Default</SelectItem>
+                      <SelectItem value="blue">Blue</SelectItem>
+                      <SelectItem value="green">Green</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Language */}
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-sm font-medium text-white/90">Language</span>
+                  <Select defaultValue="auto">
+                    <SelectTrigger className="w-40 bg-transparent border-none text-white/60 hover:text-white transition-colors focus:ring-0 px-0 justify-end gap-2 text-right">
+                      <SelectValue placeholder="Select" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#2f2f2f] border-white/10 text-white">
+                      <SelectItem value="auto">Auto-detect</SelectItem>
+                      <SelectItem value="en">English</SelectItem>
+                      <SelectItem value="es">Spanish</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Spoken Language */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-white/90">Spoken language</span>
+                    <Select defaultValue="auto">
+                      <SelectTrigger className="w-40 bg-transparent border-none text-white/60 hover:text-white transition-colors focus:ring-0 px-0 justify-end gap-2 text-right">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#2f2f2f] border-white/10 text-white">
+                        <SelectItem value="auto">Auto-detect</SelectItem>
+                        <SelectItem value="en-US">English (US)</SelectItem>
+                        <SelectItem value="en-UK">English (UK)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-xs text-white/30 leading-relaxed">
+                    For best results, select the language you mainly speak. If it's not listed, it may still be supported via auto-detection.
+                  </p>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Voice */}
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-sm font-medium text-white/90">Voice</span>
+                  <div className="flex items-center gap-4">
+                    <Button variant="ghost" size="sm" className="bg-white/5 hover:bg-white/10 text-white gap-2 rounded-full h-8 px-4">
+                      <Play size={14} className="fill-white" />
+                      Play
+                    </Button>
+                    <Select defaultValue="spruce">
+                      <SelectTrigger className="w-24 bg-transparent border-none text-white/60 hover:text-white transition-colors focus:ring-0 px-0 justify-end gap-2 text-right">
+                        <SelectValue placeholder="Select" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#2f2f2f] border-white/10 text-white">
+                        <SelectItem value="spruce">Spruce</SelectItem>
+                        <SelectItem value="oak">Oak</SelectItem>
+                        <SelectItem value="willow">Willow</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                {/* Separate Voice */}
+                <div className="flex items-center justify-between gap-8 py-1">
+                  <div className="flex-1 space-y-1">
+                    <span className="text-sm font-medium text-white/90">Separate Voice</span>
+                    <p className="text-xs text-white/30 leading-relaxed">
+                      Keep ChatGPT Voice in a separate full screen, without real time transcripts and visuals.
+                    </p>
+                  </div>
+                  <Switch className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" />
+                </div>
+              </div>
+            </div>
+          )}
+          {activeTab !== "general" && (
+            <div className="h-full flex flex-col items-center justify-center text-center opacity-30">
+              <p className="text-sm font-medium">Settings for {activeTab} coming soon.</p>
+            </div>
+          )}
+        </main>
+      </DialogContent>
+    </Dialog>
+  );
+}

@@ -31,6 +31,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { SettingsDialog } from '@/components/SettingsDialog';
 
 type Message = {
   id: string;
@@ -66,6 +67,7 @@ export default function ChatPage() {
   const [userData, setUserData] = useState<any>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [msgCopiedId, setMsgCopiedId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -227,7 +229,10 @@ export default function ChatPage() {
         </ScrollArea>
         
         <div className="p-4 border-t border-white/5 mt-auto">
-          <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
+          <div 
+            onClick={() => setSettingsOpen(true)}
+            className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group"
+          >
             <Avatar className="h-8 w-8 rounded-full border border-white/10">
               <AvatarImage src={userPhoto} />
               <AvatarFallback><User size={16} /></AvatarFallback>
@@ -451,6 +456,8 @@ export default function ChatPage() {
           </div>
         </div>
       </main>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }
