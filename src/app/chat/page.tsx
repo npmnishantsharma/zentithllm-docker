@@ -26,6 +26,8 @@ import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -48,8 +50,8 @@ const INITIAL_CONVERSATIONS = [
 
 const MOCK_MESSAGES: Record<string, Message[]> = {
   '2': [
-    { id: 'm1', role: 'assistant', senderName: 'Nexus AI', content: "Hello! I've analyzed your current CI/CD pipeline. How can I help you optimize the Discord webhook triggers today? Here's an example of a webhook structure:\n\n```json\n{\n  \"content\": \"Build Success!\",\n  \"embeds\": [{\n    \"title\": \"Android App\",\n    \"description\": \"Build #45 passed gracefully.\",\n    \"color\": 3066993\n  }]\n}\n```", timestamp: '10:24 AM', avatar: 'https://picsum.photos/seed/ai/100/100' },
-    { id: 'm2', role: 'user', senderName: 'You', content: "Let's review the triggers. We need more granular build data in the notifications.", timestamp: '10:25 AM' },
+    { id: 'm1', role: 'assistant', senderName: 'Nexus AI', content: "Hello! I've analyzed your current CI/CD pipeline. How can I help you optimize the Discord webhook triggers today? Here's an example of a webhook structure:\n\n```json\n{\n  \"content\": \"Build Success!\",\n  \"embeds\": [{\n    \"title\": \"Android App\",\n    \"description\": \"Build #45 passed gracefully.\",\n    \"color\": 3066993\n  }]\n}\n```\n\nAlso, here is some math notation support: $E = mc^2$ and $$\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}$$", timestamp: '10:24 AM', avatar: 'https://picsum.photos/seed/ai/100/100' },
+    { id: 'm2', role: 'user', senderName: 'You', content: "Let's review the triggers. We need more granular build data in the notifications. Can you also explain the equation $P(A|B) = \\frac{P(B|A)P(A)}{P(B)}$?", timestamp: '10:25 AM' },
   ],
 };
 
@@ -123,7 +125,7 @@ export default function ChatPage() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         senderName: 'Nexus AI',
-        content: "I've processed that request. The webhook payload has been updated to include granular telemetry for build status, duration, and error logs.\n\n### Updated Configuration\n\n```yaml\nwebhook:\n  url: \"${DISCORD_WEBHOOK_URL}\"\n  triggers:\n    - build_status\n    - duration_metrics\n    - error_logs\n```",
+        content: "I've processed that request. The webhook payload has been updated to include granular telemetry for build status, duration, and error logs.\n\n### Updated Configuration\n\n```yaml\nwebhook:\n  url: \"${DISCORD_WEBHOOK_URL}\"\n  triggers:\n    - build_status\n    - duration_metrics\n    - error_logs\n```\n\nRegarding the equation, that's **Bayes' Theorem**, which describes the probability of an event based on prior knowledge of conditions that might be related to the event.",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         avatar: 'https://picsum.photos/seed/ai/100/100'
       };
@@ -279,7 +281,8 @@ export default function ChatPage() {
                         
                         <div className="text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words markdown-content">
                           <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
                             components={{
                               code({ node, inline, className, children, ...props }: any) {
                                 const match = /language-(\w+)/.exec(className || '');
