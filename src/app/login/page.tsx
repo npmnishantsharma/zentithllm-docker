@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Terminal, Github, Cpu } from 'lucide-react';
+import { Terminal, Github, Cpu, Sparkles } from 'lucide-react';
 
 export default function LoginPage() {
   return (
@@ -60,10 +60,18 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <Button variant="outline" className="w-full border-border bg-transparent hover:bg-[#1e1f22] text-foreground rounded-sm font-code text-xs transition-colors">
-              <Github className="mr-2 h-4 w-4" />
-              GitHub Auth
-            </Button>
+            <div className="grid gap-2">
+              <Button variant="outline" className="w-full border-border bg-transparent hover:bg-primary/10 hover:text-primary hover:border-primary/50 text-foreground rounded-sm font-code text-xs transition-all group" asChild>
+                <Link href="/chat">
+                  <Sparkles className="mr-2 h-4 w-4 text-primary group-hover:animate-pulse" />
+                  Sign in with NexusLLM
+                </Link>
+              </Button>
+              <Button variant="outline" className="w-full border-border bg-transparent hover:bg-[#1e1f22] text-foreground rounded-sm font-code text-xs transition-colors">
+                <Github className="mr-2 h-4 w-4" />
+                GitHub Auth
+              </Button>
+            </div>
           </CardContent>
           <CardFooter className="flex flex-col space-y-4 pt-2">
             <p className="text-center text-[11px] text-muted-foreground font-code">
