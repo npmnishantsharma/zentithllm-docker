@@ -1,18 +1,16 @@
-
 "use client";
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sparkles, LayoutDashboard, Loader2 } from 'lucide-react';
+import { Sparkles, LayoutDashboard, Loader2, CheckCircle2 } from 'lucide-react';
 import { authenticateWithNexusLLM } from './actions';
 import { useToast } from '@/hooks/use-toast';
 
 export default function LoginPage() {
-  const router = useRouter();
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
 
   const handleLogin = async () => {
     setIsLoading(true);
@@ -20,20 +18,25 @@ export default function LoginPage() {
       const result = await authenticateWithNexusLLM();
       
       if (result.success) {
-        router.push('/chat');
+        setIsSuccess(true);
+        toast({
+          title: "Success",
+          description: "Authenticated with NexusLLM successfully.",
+        });
       } else {
-        // Even if the request fails, we allow navigation for prototyping, 
-        // but we'll show a toast error if there's a real issue.
         console.error('Login failed:', result.error);
         toast({
           variant: "destructive",
           title: "Authentication Alert",
-          description: "Could not reach NexusLLM server, but proceeding to demo.",
+          description: result.error || "Could not reach NexusLLM server.",
         });
-        router.push('/chat');
       }
-    } catch (error) {
-      router.push('/chat');
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "An unexpected error occurred during login.",
+      });
     } finally {
       setIsLoading(false);
     }
@@ -58,16 +61,24 @@ export default function LoginPage() {
             <div className="space-y-4">
               <Button 
                 onClick={handleLogin}
-                disabled={isLoading}
+                disabled={isLoading || isSuccess}
                 className="w-full bg-foreground text-background hover:bg-foreground/90 rounded-2xl h-12 transition-all font-bold group shadow-xl" 
               >
                 {isLoading ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : isSuccess ? (
+                  <CheckCircle2 className="mr-2 h-4 w-4 text-green-500" />
                 ) : (
                   <Sparkles className="mr-2 h-4 w-4 group-hover:animate-pulse" />
                 )}
-                Sign in with NexusLLM
+                {isSuccess ? "Authenticated" : "Sign in with NexusLLM"}
               </Button>
+              
+              {isSuccess && (
+                <p className="text-center text-xs text-muted-foreground animate-fade-in">
+                  Authentication session active.
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
