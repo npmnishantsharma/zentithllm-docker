@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Settings,
   Bell,
@@ -27,6 +28,10 @@ import {
   UserCircle,
   Play,
   ChevronRight,
+  Mail,
+  AtSign,
+  Fingerprint,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
@@ -49,7 +54,21 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = React.useState("general");
+  const [userData, setUserData] = React.useState<any>(null);
   const router = useRouter();
+
+  React.useEffect(() => {
+    if (open) {
+      const savedUser = localStorage.getItem('nexus_user_data');
+      if (savedUser) {
+        try {
+          setUserData(JSON.parse(savedUser));
+        } catch (e) {
+          console.error("Failed to parse user data", e);
+        }
+      }
+    }
+  }, [open]);
 
   const handleLogout = () => {
     localStorage.removeItem('nexus_session_active');
@@ -283,7 +302,88 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             </div>
           )}
 
-          {activeTab !== "general" && activeTab !== "security" && (
+          {activeTab === "account" && userData && (
+            <div className="space-y-8 animate-in fade-in duration-300">
+              <h2 className="text-xl font-semibold text-white mb-6">Account</h2>
+              
+              <div className="flex flex-col items-center gap-4 p-6 bg-white/5 rounded-3xl border border-white/5 mb-8">
+                <Avatar className="h-20 w-20 border-2 border-primary/20">
+                  <AvatarImage src={userData.photoURL} />
+                  <AvatarFallback className="bg-white/10 text-white text-xl">
+                    {userData.displayName?.[0] || 'U'}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="text-center">
+                  <h3 className="text-lg font-bold text-white">{userData.displayName}</h3>
+                  <p className="text-sm text-white/40">@{userData.username}</p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div className="flex items-center justify-between py-1">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-white/5 flex items-center justify-center text-white/60">
+                      <Mail size={16} />
+                    </div>
+                    <span className="text-sm font-medium text-white/90">Email address</span>
+                  </div>
+                  <span className="text-sm text-white/40">{userData.email}</span>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                <div className="flex items-center justify-between py-1">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-white/5 flex items-center justify-center text-white/60">
+                      <AtSign size={16} />
+                    </div>
+                    <span className="text-sm font-medium text-white/90">Username</span>
+                  </div>
+                  <span className="text-sm text-white/40">{userData.username}</span>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                <div className="flex items-center justify-between py-1">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-white/5 flex items-center justify-center text-white/60">
+                      <ShieldCheck size={16} />
+                    </div>
+                    <span className="text-sm font-medium text-white/90">Role</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary font-bold uppercase tracking-wider">
+                      {userData.role}
+                    </span>
+                    {userData.userTag && (
+                      <span 
+                        className="text-[10px] px-2 py-0.5 rounded-full font-bold text-white"
+                        style={{ background: userData.userTag.color }}
+                      >
+                        {userData.userTag.name}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="h-px bg-white/5" />
+
+                <div className="flex items-center justify-between py-1">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-white/5 flex items-center justify-center text-white/60">
+                      <Fingerprint size={16} />
+                    </div>
+                    <span className="text-sm font-medium text-white/90">User ID</span>
+                  </div>
+                  <code className="text-[10px] bg-white/5 px-2 py-1 rounded text-white/30 font-mono truncate max-w-[150px]">
+                    {userData.uid}
+                  </code>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab !== "general" && activeTab !== "security" && activeTab !== "account" && (
             <div className="h-full flex flex-col items-center justify-center text-center opacity-30">
               <p className="text-sm font-medium">Settings for {activeTab} coming soon.</p>
             </div>
