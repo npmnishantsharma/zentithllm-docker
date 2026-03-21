@@ -256,7 +256,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   <div className="flex-1 space-y-1">
                     <span className="text-sm font-medium text-white/90">Authenticator app</span>
                     <p className="text-xs text-white/30 leading-relaxed">
-                      Use one-time codes from an authenticator app.
+                      Use one-time codes from an authenticator app like Google Authenticator or Microsoft Authenticator for maximum security.
                     </p>
                   </div>
                   <Switch className="data-[state=checked]:bg-white data-[state=unchecked]:bg-white/10 border-none h-5 w-9 shrink-0" />
