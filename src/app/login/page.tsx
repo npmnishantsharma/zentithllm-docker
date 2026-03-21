@@ -1,10 +1,9 @@
-
 "use client";
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sparkles, LayoutDashboard, Loader2, CheckCircle2 } from 'lucide-react';
+import { Sparkles, LayoutDashboard, Loader2, CheckCircle2, ExternalLink } from 'lucide-react';
 import { authenticateWithNexusLLM, getUserInfoWithCode } from './actions';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
@@ -18,40 +17,59 @@ export default function LoginPage() {
 
   const handleLogin = async () => {
     setIsLoading(true);
-    setAuthStatus('Initiating session...');
+    setAuthStatus('Initiating secure session...');
     
     try {
+      // Step 1: Create session and get authorize_url
       const result = await authenticateWithNexusLLM();
       
       if (result.success) {
         setIsSuccess(true);
-        setAuthStatus('Session created. Waiting for authorization...');
+        setAuthStatus('Session created. Opening authorization window...');
         
         const sessionId = result.data.session_id || result.data.sessionId;
+        const authorizeUrl = result.data.authorize_url || result.data.authorizeUrl;
         
         if (!sessionId) {
           throw new Error('No session ID returned from authentication server.');
         }
 
+        // Open the authorization window
+        if (authorizeUrl) {
+          const width = 600;
+          const height = 700;
+          const left = window.screenX + (window.outerWidth - width) / 2;
+          const top = window.screenY + (window.outerHeight - height) / 2;
+          
+          window.open(
+            authorizeUrl, 
+            'NexusLLMAuthorize', 
+            `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
+          );
+        } else {
+          console.warn('No authorize_url provided in session response.');
+        }
+
+        // Step 2: Listen for the authorized status via the proxy stream
         const url = `/api/auth/proxy-stream?sessionId=${sessionId}`;
         const source = new EventSource(url);
 
         source.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log('Stream Update:', data);
+            console.log('Handshake Stream Update:', data);
 
             if (data.status === 'authorized' && data.code) {
-              setAuthStatus('Authorized! Finalizing handshake...');
+              setAuthStatus('Identity authorized! Finalizing handshake...');
               
               // Step 3: Exchange code for user info
               const userInfoResult = await getUserInfoWithCode(data.code);
               
               if (userInfoResult.success) {
-                setAuthStatus(`Identity verified: ${userInfoResult.data.name || 'Developer'}`);
+                setAuthStatus(`Verified: ${userInfoResult.data.name || 'Developer'}`);
                 
                 toast({
-                  title: "Handshake Complete",
+                  title: "Handshake Successful",
                   description: "Synchronized with NexusLLM. Redirecting to workspace.",
                 });
 
@@ -59,15 +77,25 @@ export default function LoginPage() {
                 
                 setTimeout(() => {
                   router.push('/chat');
-                }, 1200);
+                }, 1500);
               } else {
                 throw new Error(userInfoResult.error || 'Profile synchronization failed.');
               }
+            } else if (data.status === 'expired') {
+              source.close();
+              setIsLoading(false);
+              setIsSuccess(false);
+              setAuthStatus(null);
+              toast({
+                variant: "destructive",
+                title: "Session Expired",
+                description: "The authentication session has timed out. Please try again.",
+              });
             } else {
-              setAuthStatus(`Status: ${data.status || 'Waiting...'}`);
+              setAuthStatus(`Uplink Status: ${data.status || 'Waiting for user...'}`);
             }
           } catch (e: any) {
-            console.error('Error during handshake:', e);
+            console.error('Error during handshake stream processing:', e);
             source.close();
             setIsLoading(false);
             setIsSuccess(false);
@@ -81,22 +109,21 @@ export default function LoginPage() {
         };
 
         source.onerror = (err) => {
-          console.error('EventSource failed:', err);
+          console.error('Handshake EventSource failed:', err);
           source.close();
-          setIsLoading(false);
-          setIsSuccess(false);
-          setAuthStatus(null);
+          // We don't necessarily stop loading here because the user might still be authorizing in the popup
+          // However, for UX we show a toast.
           toast({
             variant: "destructive",
-            title: "Uplink Error",
-            description: "The authentication stream was interrupted.",
+            title: "Stream Interrupted",
+            description: "Connection to auth server lost. Still waiting for authorization signal.",
           });
         };
 
       } else {
         toast({
           variant: "destructive",
-          title: "Session Failed",
+          title: "Session Initialization Failed",
           description: result.error || "Could not reach NexusLLM server.",
         });
         setIsLoading(false);
@@ -105,7 +132,7 @@ export default function LoginPage() {
     } catch (error: any) {
       toast({
         variant: "destructive",
-        title: "Unexpected Error",
+        title: "Unexpected Auth Error",
         description: error.message || "An error occurred during authentication.",
       });
       setIsLoading(false);
@@ -142,18 +169,24 @@ export default function LoginPage() {
                 ) : (
                   <Sparkles className="mr-2 h-4 w-4 group-hover:animate-pulse" />
                 )}
-                {isSuccess ? "Handshaking..." : "Sign in with NexusLLM"}
+                {isSuccess ? "Awaiting Handshake..." : "Sign in with NexusLLM"}
               </Button>
               
               {authStatus && (
                 <div className="flex flex-col items-center gap-3 animate-fade-in">
-                  <div className="flex items-center gap-2 text-xs font-code text-muted-foreground bg-background/40 px-3 py-1.5 rounded-full border border-border/20">
+                  <div className="flex items-center gap-2 text-[10px] font-code text-muted-foreground bg-background/40 px-3 py-1.5 rounded-full border border-border/20">
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
                     </span>
                     {authStatus}
                   </div>
+                  {isSuccess && !isLoading && (
+                    <p className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
+                      <ExternalLink size={10} />
+                      Popup blocked? Check your browser settings.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -163,7 +196,7 @@ export default function LoginPage() {
         <div className="mt-8 flex items-center justify-center gap-2">
           <div className="h-1 w-1 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
           <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 font-bold font-code">
-            Secure Uplink Active
+            Secure Handshake Active
           </span>
         </div>
       </div>
