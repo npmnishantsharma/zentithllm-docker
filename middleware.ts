@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from 'redis';
+import { SessionService } from '@/lib/database';
 
 /**
  * Middleware to check if user has a valid session
@@ -27,14 +27,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  // Optional: Validate session exists in Redis
+  // Validate session exists in Redis
   try {
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-    const client = createClient({ url: redisUrl });
-    
-    await client.connect();
-    const sessionData = await client.get(`zentith:session:${sessionId}`);
-    await client.disconnect();
+    const sessionData = await SessionService.getSession(sessionId);
 
     if (!sessionData) {
       // Session expired or invalid

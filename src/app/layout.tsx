@@ -1,6 +1,10 @@
 import type {Metadata} from 'next';
 import './globals.css';
 import 'katex/dist/katex.min.css';
+import { initializeApp } from '@/lib/init';
+
+// Initialize databases on app startup
+initializeApp().catch(console.error);
 
 export const metadata: Metadata = {
   title: 'NexusLLM',

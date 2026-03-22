@@ -1,16 +1,21 @@
 /**
- * Session utilities for accessing user data from Redis
+ * Session utilities for accessing user data from Redis and PostgreSQL
  * Use in API routes and server components
+ *
+ * Strategy:
+ * - Redis: Session tokens and temporary session data
+ * - PostgreSQL: User profiles and long-term session tracking
  */
 
 import { cookies } from 'next/headers';
-import { getKey } from '@/lib/keyv';
+import { SessionService, UserService, User } from '@/lib/database';
 
 export interface SessionUser {
   userId: string;
-  displayName: string;
+  displayName?: string;
   email?: string;
   profilePicture?: string;
+  isAdmin?: boolean;
   [key: string]: any;
 }
 
@@ -21,7 +26,7 @@ export interface SessionData {
 }
 
 /**
- * Get user session from Redux using the session cookie
+ * Get user session from Redis using the session cookie
  * Safe to use in Server Components and API routes
  */
 export async function getSessionData(): Promise<SessionData | null> {
@@ -33,21 +38,65 @@ export async function getSessionData(): Promise<SessionData | null> {
       return null;
     }
 
-    const userData = await getKey<SessionUser>(`session:${sessionId}`);
+    const sessionData = await SessionService.getSession(sessionId);
 
-    if (!userData) {
+    if (!sessionData) {
+      return null;
+    }
+
+    // Get full user data from PostgreSQL
+    const user = await UserService.getUserById(sessionData.userId);
+
+    if (!user) {
+      // Clean up orphaned session
+      await SessionService.deleteSession(sessionId);
       return null;
     }
 
     return {
-      user: userData,
+      user: {
+        userId: user.id,
+        displayName: user.displayName,
+        email: user.email,
+        profilePicture: user.profilePicture,
+        isAdmin: user.isAdmin,
+        ...sessionData,
+      },
       sessionId,
-      loginTime: userData.loginTime || new Date().toISOString(),
+      loginTime: sessionData.createdAt || new Date().toISOString(),
     };
   } catch (error) {
     console.error('Error getting session data:', error);
     return null;
   }
+}
+
+/**
+ * Create a new session for a user
+ */
+export async function createSession(user: User): Promise<string> {
+  const sessionId = await SessionService.createSession(user.id, {
+    displayName: user.displayName,
+    email: user.email,
+    profilePicture: user.profilePicture,
+    isAdmin: user.isAdmin,
+  });
+
+  return sessionId;
+}
+
+/**
+ * Destroy a user session
+ */
+export async function destroySession(sessionId: string): Promise<void> {
+  await SessionService.deleteSession(sessionId);
+}
+
+/**
+ * Extend session expiration
+ */
+export async function extendSession(sessionId: string): Promise<void> {
+  await SessionService.extendSession(sessionId);
 }
 
 /**

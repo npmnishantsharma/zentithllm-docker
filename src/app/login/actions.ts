@@ -2,7 +2,7 @@
 'use server';
 
 import { cookies } from 'next/headers';
-import { setKey, isFirstUser, markAdminInitialized } from '@/lib/keyv';
+import { UserService, SessionService } from '@/lib/database';
 import { randomBytes } from 'crypto';
 
 /**
@@ -19,25 +19,39 @@ function generateSessionId(): string {
 export async function createUserSession(userData: any) {
   try {
     // Check if this is the first user
-    const isFirst = await isFirstUser();
-    
+    const isFirst = await UserService.isFirstUser();
+
     if (isFirst) {
       // Make first user an admin
-      userData.role = 'admin';
+      userData.isAdmin = true;
       console.log('[Session] Making first user an admin:', userData.displayName);
-      
-      // Mark admin as initialized
-      await markAdminInitialized();
-    } else if (!userData.role) {
+    } else if (userData.isAdmin === undefined) {
       // Default role for non-first users
-      userData.role = 'user';
+      userData.isAdmin = false;
     }
-    
-    const sessionId = generateSessionId();
-    
-    // Store in Redis with 24 hour expiration
-    await setKey(`session:${sessionId}`, userData, 24 * 60 * 60 * 1000);
-    
+
+    // Create or update user in PostgreSQL
+    let user = await UserService.getUserByEmail(userData.email);
+
+    if (!user) {
+      user = await UserService.createUser(
+        userData.email,
+        userData.displayName,
+        userData.profilePicture
+      );
+    } else {
+      // Update last login
+      await UserService.updateUser(user.id, { lastLogin: new Date() });
+    }
+
+    // Create session in Redis
+    const sessionId = await SessionService.createSession(user.id, {
+      displayName: user.displayName,
+      email: user.email,
+      profilePicture: user.profilePicture,
+      isAdmin: user.isAdmin,
+    });
+
     // Set HttpOnly cookie (accessible only by the app/server)
     const cookieStore = await cookies();
     cookieStore.set('sessionId', sessionId, {
@@ -60,12 +74,11 @@ export async function createUserSession(userData: any) {
  */
 export async function logout() {
   try {
-    const { deleteKey } = await import('@/lib/keyv');
     const cookieStore = await cookies();
     const sessionId = cookieStore.get('sessionId')?.value;
 
     if (sessionId) {
-      await deleteKey(`session:${sessionId}`);
+      await SessionService.deleteSession(sessionId);
     }
 
     cookieStore.delete('sessionId');
@@ -88,14 +101,13 @@ export async function getUserSession() {
       return { success: false, error: 'No session found' };
     }
 
-    const { getKey } = await import('@/lib/keyv');
-    const userData = await getKey(`session:${sessionId}`);
+    const sessionData = await SessionService.getSession(sessionId);
 
-    if (!userData) {
+    if (!sessionData) {
       return { success: false, error: 'Session expired' };
     }
 
-    return { success: true, userData, sessionId };
+    return { success: true, userData: sessionData, sessionId };
   } catch (error: any) {
     console.error('Get session error:', error.message);
     return { success: false, error: error.message };

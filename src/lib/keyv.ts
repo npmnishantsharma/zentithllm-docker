@@ -22,6 +22,7 @@ let redisClient: ReturnType<typeof createClient>;
 
 export async function initKeyv() {
   if (!keyv) {
+    // Use Docker Redis when available, fallback to local
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
     
     try {

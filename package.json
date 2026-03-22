@@ -9,7 +9,16 @@
     "build": "NODE_ENV=production next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:setup": "./setup-databases.sh",
+    "db:check": "./check-databases.sh",
+    "db:remove": "./remove-databases.sh",
+    "db:start": "sudo service postgresql start && sudo service redis-server start",
+    "db:stop": "sudo service postgresql stop && sudo service redis-server stop",
+    "db:status": "sudo service postgresql status && sudo service redis-server status",
+    "db:logs": "sudo journalctl -u postgresql -f",
+    "db:redis-logs": "sudo journalctl -u redis-server -f",
+    "db:reset": "sudo -u postgres dropdb zentith && sudo -u postgres createdb zentith && sudo -u postgres psql -d zentith -f init.sql"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
@@ -38,6 +47,7 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.0",
+    "@types/pg": "^8.20.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
@@ -51,6 +61,7 @@
     "next": "15.5.9",
     "otpauth": "^9.5.0",
     "patch-package": "^8.0.0",
+    "pg": "^8.20.0",
     "react": "^19.2.1",
     "react-day-picker": "^9.11.3",
     "react-dom": "^19.2.1",
