@@ -8,6 +8,16 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  // Trust forwarded headers for Server Actions in development/forwarded environments
+  experimental: {
+    serverActions: {
+      allowedOrigins: [
+        'localhost:9002',
+        '*.app.github.dev', // Allows any codespace URL
+        process.env.CODESPACE_NAME + '-9002.app.github.dev' 
+      ],
+    },
+  },
   images: {
     remotePatterns: [
       {

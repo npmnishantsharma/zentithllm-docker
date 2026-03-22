@@ -78,15 +78,51 @@ export default function ChatPage() {
     }
   }, [isMobile]);
 
+  // Fetch user profile from session
   useEffect(() => {
-    const savedUser = localStorage.getItem('nexus_user_data');
-    if (savedUser) {
+    async function fetchUserProfile() {
       try {
-        setUserData(JSON.parse(savedUser));
-      } catch (e) {
-        console.error("Failed to parse user data", e);
+        // Try to fetch from the profile API (uses session ID from cookie)
+        const response = await fetch('/api/profile');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data) {
+            // Map API response to user data
+            const profileData = {
+              userId: data.data.uid,
+              displayName: data.data.displayName,
+              email: data.data.email,
+              photoURL: data.data.photoURL,
+              username: data.data.username,
+              role: data.data.role,
+              userTag: data.data.userTag || { 
+                name: 'User', 
+                color: '#19c37d',
+                emoji: '👤'
+              }
+            };
+            setUserData(profileData);
+            console.log('[Chat] User profile loaded from session:', profileData);
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('[Chat] Failed to fetch profile from API:', error);
+      }
+      
+      // Fallback to localStorage if API fails
+      const savedUser = localStorage.getItem('nexus_user_data');
+      if (savedUser) {
+        try {
+          setUserData(JSON.parse(savedUser));
+          console.log('[Chat] User profile loaded from localStorage');
+        } catch (e) {
+          console.error("Failed to parse user data from localStorage", e);
+        }
       }
     }
+
+    fetchUserProfile();
     setMessages(MOCK_MESSAGES[activeConvId] || []);
   }, [activeConvId]);
 
@@ -239,6 +275,9 @@ export default function ChatPage() {
             </Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate text-white/90">{userDisplayName}</p>
+              {userData?.role && (
+                <p className="text-[11px] text-white/50 truncate capitalize">{userData.role}</p>
+              )}
             </div>
             <Settings size={16} className="text-white/30 group-hover:text-white transition-colors" />
           </div>
@@ -296,9 +335,10 @@ export default function ChatPage() {
                           </p>
                           {msg.role === 'user' && userTag && (
                             <span 
-                              className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-white inline-flex items-center align-middle"
+                              className="text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider text-white inline-flex items-center align-middle gap-1"
                               style={{ background: userTag.color }}
                             >
+                              {userTag.emoji && <span>{userTag.emoji}</span>}
                               {userTag.name}
                             </span>
                           )}

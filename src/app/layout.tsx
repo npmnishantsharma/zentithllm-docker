@@ -3,8 +3,8 @@ import './globals.css';
 import 'katex/dist/katex.min.css';
 
 export const metadata: Metadata = {
-  title: 'DevCom Chat',
-  description: 'A modern chat application for developers.',
+  title: 'NexusLLM',
+  description: 'An privacy first chat application.',
 };
 
 export default function RootLayout({
