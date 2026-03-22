@@ -211,7 +211,7 @@ export default function ChatPage() {
 
       <aside className={cn(
         "bg-[#0d0d0d] border border-white/10 transition-all duration-300 flex flex-col shrink-0 z-50",
-        "mt-[10px] mb-[10px] rounded-2xl overflow-hidden",
+        "mt-[10px] mb-[10px] ml-[10px] rounded-2xl overflow-hidden",
         isMobile ? "fixed inset-y-0 left-0" : "relative",
         sidebarOpen ? "w-72" : "w-0 overflow-hidden border-none"
       )}>
