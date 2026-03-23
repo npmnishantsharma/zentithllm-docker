@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Sparkles, LayoutDashboard, Loader2, CheckCircle2 } from 'lucide-react';
+import { Sparkles, LayoutDashboard, Loader2, CheckCircle2, KeyRound } from 'lucide-react';
 import { authenticateWithNexusLLM, getUserInfoWithCode } from './actions';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
@@ -14,6 +14,22 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
+  const [isPasskeyReady, setIsPasskeyReady] = useState(false);
+
+  const checkPasskeySupport = async () => {
+    if (!window.PublicKeyCredential) {
+      toast({
+        variant: "destructive",
+        title: "Passkey not supported",
+        description: "Your browser doesn't support WebAuthn/passkeys.",
+      });
+      return false;
+    }
+
+    const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    setIsPasskeyReady(available);
+    return available;
+  };
 
   const handleLogin = async () => {
     setIsLoading(true);
@@ -61,12 +77,12 @@ export default function LoginPage() {
               if (userInfoResult.success) {
                 setAuthStatus(`Verified: ${userInfoResult.data.user?.displayName || 'Developer'}`);
                 
-                localStorage.setItem('nexus_session_active', 'true');
-                localStorage.setItem('nexus_user_data', JSON.stringify(userInfoResult.data.user));
+                // User session is now stored in Redis and HttpOnly cookie is set by server action
+                // No need for localStorage - the secure cookie handles session management
 
                 toast({
                   title: "Handshake Successful",
-                  description: "Synchronized with NexusLLM. Redirecting to workspace.",
+                  description: "Synchronized with NexusLLM. Session created securely. Redirecting to workspace.",
                 });
 
                 source.close();
@@ -132,6 +148,114 @@ export default function LoginPage() {
     }
   };
 
+  const handlePasskeyLogin = async () => {
+    setIsLoading(true);
+    setAuthStatus('Getting passkey challenge...');
+
+    try {
+      // Helper to convert base64url to Uint8Array
+      const base64urlToUint8Array = (base64url: string) => {
+        const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+        const paddedBase64 = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '=');
+        const binaryString = atob(paddedBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
+      };
+
+      // Get authentication options
+      const optionsRes = await fetch('/api/passkey/authenticate-options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!optionsRes.ok) {
+        throw new Error('Failed to get authentication options');
+      }
+
+      const { challengeId, options } = await optionsRes.json();
+      setAuthStatus('Please verify with your passkey...');
+
+      // Get credential from user
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          ...options,
+          challenge: base64urlToUint8Array(options.challenge),
+          allowCredentials: options.allowCredentials?.map((cred: any) => ({
+            ...cred,
+            id: base64urlToUint8Array(cred.id),
+          })) || [],
+        },
+      });
+
+      if (!assertion || assertion.type !== 'public-key') {
+        throw new Error('No passkey credential received');
+      }
+
+      setAuthStatus('Verifying passkey...');
+
+      const publicKeyAssertion = assertion as any;
+      
+      // Helper to convert Uint8Array to base64url
+      const uint8ArrayToBase64url = (uint8Array: Uint8Array) => {
+        const binaryString = String.fromCharCode.apply(null, Array.from(uint8Array));
+        const base64 = btoa(binaryString);
+        return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      };
+
+      const verifyRes = await fetch('/api/passkey/authenticate-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          credential: {
+            id: publicKeyAssertion.id,
+            rawId: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.rawId)),
+            response: {
+              clientDataJSON: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.clientDataJSON)),
+              authenticatorData: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.authenticatorData)),
+              signature: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.signature)),
+              userHandle: publicKeyAssertion.response.userHandle ? uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.userHandle)) : null,
+            },
+            type: publicKeyAssertion.type,
+          },
+          challengeId,
+        }),
+      });
+
+      if (!verifyRes.ok) {
+        const error = await verifyRes.json();
+        throw new Error(error.error || 'Verification failed');
+      }
+
+      const verifyData = await verifyRes.json();
+
+      if (verifyData.success) {
+        setAuthStatus(`Authenticated: ${verifyData.user?.displayName || 'User'}`);
+        toast({
+          title: "Login Successful",
+          description: "Passkey authentication verified. Redirecting to workspace.",
+        });
+
+        setTimeout(() => {
+          router.push('/chat');
+        }, 1500);
+      } else {
+        throw new Error(verifyData.error || 'Authentication verification failed');
+      }
+    } catch (error: any) {
+      console.error('Passkey login error:', error);
+      toast({
+        variant: "destructive",
+        title: "Passkey Login Failed",
+        description: error.message || "Could not authenticate with passkey.",
+      });
+      setIsLoading(false);
+      setAuthStatus(null);
+    }
+  };
+
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-background p-4 sm:p-6 font-body dark text-foreground">
       <div className="w-full max-w-[400px] animate-fade-in flex flex-col items-center">
@@ -148,7 +272,7 @@ export default function LoginPage() {
             <CardTitle className="text-lg sm:text-xl font-bold">NexusLLM Protocol</CardTitle>
           </CardHeader>
           <CardContent className="py-6 sm:py-8 px-4 sm:px-6">
-            <div className="space-y-6">
+            <div className="space-y-4">
               <Button 
                 onClick={handleLogin}
                 disabled={isLoading}
@@ -162,6 +286,26 @@ export default function LoginPage() {
                   <Sparkles className="mr-2 h-4 w-4 group-hover:animate-pulse" />
                 )}
                 {isSuccess ? "Awaiting Handshake..." : "Sign in with NexusLLM"}
+              </Button>
+
+              <Button 
+                onClick={() => {
+                  checkPasskeySupport().then(ready => {
+                    if (ready) {
+                      handlePasskeyLogin();
+                    }
+                  });
+                }}
+                disabled={isLoading}
+                variant="outline"
+                className="w-full rounded-2xl h-12 transition-all font-bold group border-muted-foreground/30 hover:bg-muted/50" 
+              >
+                {isLoading && !isSuccess ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <KeyRound className="mr-2 h-4 w-4 group-hover:scale-110 transition-transform" />
+                )}
+                Sign in with Passkey
               </Button>
               
               {authStatus && (
