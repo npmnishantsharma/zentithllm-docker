@@ -45,17 +45,24 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Return user profile
+    const safeProfile = {
+      userId: userData.userId,
+      uid: (userData as any).uid ?? userData.userId,
+      displayName: userData.displayName,
+      email: userData.email,
+      photoURL: (userData as any).photoURL,
+      profilePicture: userData.profilePicture,
+      username: (userData as any).username,
+      role: (userData as any).role,
+      userTag: (userData as any).userTag,
+      sessionId,
+    };
+
+    // Return only safe profile fields (never full session blob)
     return NextResponse.json({
       success: true,
-      profile: {
-        userId: userData.userId,
-        displayName: userData.displayName,
-        email: userData.email,
-        profilePicture: userData.profilePicture,
-        sessionId,
-      },
-      data: userData, // Full user data from session
+      profile: safeProfile,
+      data: safeProfile,
     });
   } catch (error: any) {
     console.error('[API] Get Profile Error:', error);
@@ -98,17 +105,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Return user profile
+    const safeProfile = {
+      userId: userData.userId,
+      uid: (userData as any).uid ?? userData.userId,
+      displayName: userData.displayName,
+      email: userData.email,
+      photoURL: (userData as any).photoURL,
+      profilePicture: userData.profilePicture,
+      username: (userData as any).username,
+      role: (userData as any).role,
+      userTag: (userData as any).userTag,
+      sessionId,
+    };
+
+    // Return only safe profile fields (never full session blob)
     return NextResponse.json({
       success: true,
-      profile: {
-        userId: userData.userId,
-        displayName: userData.displayName,
-        email: userData.email,
-        profilePicture: userData.profilePicture,
-        sessionId,
-      },
-      data: userData, // Full user data from session
+      profile: safeProfile,
+      data: safeProfile,
     });
   } catch (error: any) {
     console.error('[API] Post Profile Error:', error);

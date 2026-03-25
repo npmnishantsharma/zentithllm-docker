@@ -55,6 +55,10 @@ sudo service redis-server start
 # Configure PostgreSQL
 print_status "Configuring PostgreSQL..."
 
+# Fix collation version mismatch if it exists (ignoring errors if not applicable)
+sudo -u postgres psql -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" 2>/dev/null || true
+sudo -u postgres psql -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" 2>/dev/null || true
+
 # Create database and user
 sudo -u postgres psql -c "CREATE USER zentith_user WITH PASSWORD 'zentith_password';" 2>/dev/null || print_warning "User might already exist"
 sudo -u postgres psql -c "CREATE DATABASE zentith OWNER zentith_user;" 2>/dev/null || print_warning "Database might already exist"
@@ -63,6 +67,13 @@ sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE zentith TO zentith_us
 # Run database initialization script
 print_status "Initializing database schema..."
 sudo -u postgres psql -d zentith -f "$(dirname "$0")/init.sql" || print_error "Failed to initialize database schema"
+
+# Grant privileges on schema objects
+print_status "Granting schema privileges..."
+sudo -u postgres psql -d zentith -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO zentith_user;"
+sudo -u postgres psql -d zentith -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO zentith_user;"
+sudo -u postgres psql -d zentith -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO zentith_user;"
+sudo -u postgres psql -d zentith -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO zentith_user;"
 
 # Configure Redis
 print_status "Configuring Redis..."

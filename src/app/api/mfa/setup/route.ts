@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('[API] MFA Setup Error:', error);
     return NextResponse.json(
-      { error: 'Internal Server Error', message: error.message },
+      { error: 'Internal Server Error' },
       { status: 500 }
     );
   }

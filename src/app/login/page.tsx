@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Sparkles, LayoutDashboard, Loader2, CheckCircle2, KeyRound } from 'lucide-react';
 import { authenticateWithNexusLLM, getUserInfoWithCode } from './actions';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
+import { graphqlRequest } from '@/lib/graphql-client';
 
 export default function LoginPage() {
   const { toast } = useToast();
@@ -15,6 +16,30 @@ export default function LoginPage() {
   const [isSuccess, setIsSuccess] = useState(false);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
   const [isPasskeyReady, setIsPasskeyReady] = useState(false);
+
+  // Check if user is already logged in
+  useEffect(() => {
+    async function checkSession() {
+      try {
+        const data = await graphqlRequest<{ profile: { success: boolean; data?: any } }>(`
+          query SessionProfile {
+            profile {
+              success
+              data {
+                uid
+              }
+            }
+          }
+        `);
+        if (data.profile?.success && data.profile?.data) {
+          router.replace('/chat');
+        }
+      } catch (error) {
+        console.error('Failed to verify session', error);
+      }
+    }
+    checkSession();
+  }, [router]);
 
   const checkPasskeySupport = async () => {
     if (!window.PublicKeyCredential) {
@@ -75,6 +100,20 @@ export default function LoginPage() {
               const userInfoResult = await getUserInfoWithCode(data.code);
               
               if (userInfoResult.success) {
+                if (userInfoResult.requireVerification) {
+                  setAuthStatus('Additional verification required. Entering secure mode...');
+                  source.close();
+                  toast({
+                    title: "2FA / Passkey Required",
+                    description: "Your account has extra security. Redirecting to verification...",
+                  });
+                  setTimeout(() => {
+                    // Navigate to a verification page and pass the temp session ID
+                    router.push(`/login/verify?token=${userInfoResult.tempSessionId}`);
+                  }, 1500);
+                  return;
+                }
+
                 setAuthStatus(`Verified: ${userInfoResult.data.user?.displayName || 'Developer'}`);
                 
                 // User session is now stored in Redis and HttpOnly cookie is set by server action
@@ -166,16 +205,26 @@ export default function LoginPage() {
       };
 
       // Get authentication options
-      const optionsRes = await fetch('/api/passkey/authenticate-options', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const optionsData = await graphqlRequest<{
+        passkeyAuthenticateOptions: { success: boolean; challengeId?: string; optionsJSON?: string | null; error?: string };
+      }>(`
+        mutation PasskeyAuthenticateOptions {
+          passkeyAuthenticateOptions {
+            success
+            challengeId
+            optionsJSON
+            error
+          }
+        }
+      `);
 
-      if (!optionsRes.ok) {
-        throw new Error('Failed to get authentication options');
+      const optionsResult = optionsData.passkeyAuthenticateOptions;
+      if (!optionsResult?.success || !optionsResult.optionsJSON || !optionsResult.challengeId) {
+        throw new Error(optionsResult?.error || 'Failed to get authentication options');
       }
 
-      const { challengeId, options } = await optionsRes.json();
+      const challengeId = optionsResult.challengeId;
+      const options = JSON.parse(optionsResult.optionsJSON);
       setAuthStatus('Please verify with your passkey...');
 
       // Get credential from user
@@ -205,34 +254,48 @@ export default function LoginPage() {
         return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
       };
 
-      const verifyRes = await fetch('/api/passkey/authenticate-verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          credential: {
-            id: publicKeyAssertion.id,
-            rawId: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.rawId)),
-            response: {
-              clientDataJSON: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.clientDataJSON)),
-              authenticatorData: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.authenticatorData)),
-              signature: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.signature)),
-              userHandle: publicKeyAssertion.response.userHandle ? uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.userHandle)) : null,
-            },
-            type: publicKeyAssertion.type,
-          },
+      const credentialPayload = {
+        id: publicKeyAssertion.id,
+        rawId: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.rawId)),
+        response: {
+          clientDataJSON: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.clientDataJSON)),
+          authenticatorData: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.authenticatorData)),
+          signature: uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.signature)),
+          userHandle: publicKeyAssertion.response.userHandle
+            ? uint8ArrayToBase64url(new Uint8Array(publicKeyAssertion.response.userHandle))
+            : null,
+        },
+        type: publicKeyAssertion.type,
+      };
+
+      const verifyData = await graphqlRequest<{
+        passkeyAuthenticateVerify: {
+          success: boolean;
+          error?: string;
+          user?: { displayName?: string };
+        };
+      }>(
+        `
+          mutation PasskeyAuthenticateVerify($credentialJSON: String!, $challengeId: String!) {
+            passkeyAuthenticateVerify(credentialJSON: $credentialJSON, challengeId: $challengeId) {
+              success
+              error
+              user {
+                displayName
+              }
+            }
+          }
+        `,
+        {
+          credentialJSON: JSON.stringify(credentialPayload),
           challengeId,
-        }),
-      });
+        }
+      );
 
-      if (!verifyRes.ok) {
-        const error = await verifyRes.json();
-        throw new Error(error.error || 'Verification failed');
-      }
+      const verifyResult = verifyData.passkeyAuthenticateVerify;
 
-      const verifyData = await verifyRes.json();
-
-      if (verifyData.success) {
-        setAuthStatus(`Authenticated: ${verifyData.user?.displayName || 'User'}`);
+      if (verifyResult.success) {
+        setAuthStatus(`Authenticated: ${verifyResult.user?.displayName || 'User'}`);
         toast({
           title: "Login Successful",
           description: "Passkey authentication verified. Redirecting to workspace.",
@@ -242,7 +305,7 @@ export default function LoginPage() {
           router.push('/chat');
         }, 1500);
       } else {
-        throw new Error(verifyData.error || 'Authentication verification failed');
+        throw new Error(verifyResult.error || 'Authentication verification failed');
       }
     } catch (error: any) {
       console.error('Passkey login error:', error);

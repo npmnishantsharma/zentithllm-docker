@@ -20,6 +20,23 @@ export interface User {
   isAdmin: boolean;
 }
 
+export interface AdminUserData extends User {
+  mfaEnabled: boolean;
+  mfaSecret?: string;
+  mfaBackupCodes: any[];
+  passkeys: any[];
+  conversationCount: number;
+  messageCount: number;
+  sessionCount: number;
+}
+
+export interface AppSettings {
+  isPrivate: boolean;
+  allowedEmails: string[];
+  updatedAt: Date;
+  updatedBy?: string;
+}
+
 export interface Conversation {
   id: string;
   userId: string;
@@ -39,14 +56,103 @@ export interface Message {
   metadata?: any;
 }
 
+export interface UserSecurity {
+  userId: string;
+  mfaEnabled: boolean;
+  mfaSecret?: string;
+  mfaBackupCodes?: any[];
+  passkeys: any[];
+}
+
+export class UserSecurityService {
+  private static async ensureTable(): Promise<void> {
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_security (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        mfa_enabled BOOLEAN DEFAULT FALSE,
+        mfa_secret TEXT,
+        mfa_backup_codes JSONB DEFAULT '[]'::jsonb,
+        passkeys JSONB DEFAULT '[]'::jsonb
+      )
+    `);
+  }
+
+  static async getSecurity(userId: string): Promise<UserSecurity | null> {
+    await this.ensureTable();
+    const result = await query(
+      `SELECT user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys FROM user_security WHERE user_id = $1`,
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      return null;
+    }
+    const row = result.rows[0];
+    return {
+      userId: row.user_id,
+      mfaEnabled: row.mfa_enabled,
+      mfaSecret: row.mfa_secret,
+      mfaBackupCodes: row.mfa_backup_codes ? (typeof row.mfa_backup_codes === 'string' ? JSON.parse(row.mfa_backup_codes) : row.mfa_backup_codes) : [],
+      passkeys: row.passkeys ? (typeof row.passkeys === 'string' ? JSON.parse(row.passkeys) : row.passkeys) : [],
+    };
+  }
+
+  static async updateSecurity(userId: string, updates: Partial<Pick<UserSecurity, 'mfaEnabled' | 'mfaSecret' | 'mfaBackupCodes' | 'passkeys'>>): Promise<void> {
+    await this.ensureTable();
+    // Check if exists
+    const existing = await query(`SELECT user_id FROM user_security WHERE user_id = $1`, [userId]);
+    if (existing.rows.length === 0) {
+      await query(
+        `INSERT INTO user_security (user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys) VALUES ($1, $2, $3, $4, $5)`,
+        [
+          userId, 
+          updates.mfaEnabled || false, 
+          updates.mfaSecret || null, 
+          updates.mfaBackupCodes ? JSON.stringify(updates.mfaBackupCodes) : '[]', 
+          updates.passkeys ? JSON.stringify(updates.passkeys) : '[]'
+        ]
+      );
+      return;
+    }
+
+    const fields = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (updates.mfaEnabled !== undefined) {
+      fields.push(`mfa_enabled = $${paramIndex++}`);
+      values.push(updates.mfaEnabled);
+    }
+    if (updates.mfaSecret !== undefined) {
+      fields.push(`mfa_secret = $${paramIndex++}`);
+      values.push(updates.mfaSecret);
+    }
+    if (updates.mfaBackupCodes !== undefined) {
+      fields.push(`mfa_backup_codes = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.mfaBackupCodes));
+    }
+    if (updates.passkeys !== undefined) {
+      fields.push(`passkeys = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.passkeys));
+    }
+
+    if (fields.length === 0) return;
+
+    values.push(userId);
+    await query(
+      `UPDATE user_security SET ${fields.join(', ')} WHERE user_id = $${paramIndex}`,
+      values
+    );
+  }
+}
+
 // User operations (PostgreSQL - long-term)
 export class UserService {
-  static async createUser(email: string, displayName?: string, profilePicture?: string): Promise<User> {
+  static async createUser(email: string, displayName?: string, profilePicture?: string, isAdmin: boolean = false): Promise<User> {
     const result = await query(
-      `INSERT INTO users (email, display_name, profile_picture)
-       VALUES ($1, $2, $3)
+      `INSERT INTO users (email, display_name, profile_picture, is_admin)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, email, display_name, profile_picture, created_at, updated_at, last_login, is_admin`,
-      [email, displayName, profilePicture]
+      [email, displayName, profilePicture, isAdmin]
     );
 
     const row = result.rows[0];
@@ -106,7 +212,101 @@ export class UserService {
     };
   }
 
-  static async updateUser(id: string, updates: Partial<Pick<User, 'displayName' | 'profilePicture' | 'lastLogin'>>): Promise<void> {
+  static async listUsers(limit: number = 200): Promise<User[]> {
+    const result = await query(
+      `SELECT id, email, display_name, profile_picture, created_at, updated_at, last_login, is_admin
+       FROM users
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+
+    return result.rows.map(row => ({
+      id: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      profilePicture: row.profile_picture,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+      lastLogin: row.last_login ? new Date(row.last_login) : undefined,
+      isAdmin: row.is_admin,
+    }));
+  }
+
+  static async listUsersDetailed(limit: number = 200): Promise<AdminUserData[]> {
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_security (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        mfa_enabled BOOLEAN DEFAULT FALSE,
+        mfa_secret TEXT,
+        mfa_backup_codes JSONB DEFAULT '[]'::jsonb,
+        passkeys JSONB DEFAULT '[]'::jsonb
+      )
+    `);
+
+    const result = await query(
+      `SELECT
+         u.id,
+         u.email,
+         u.display_name,
+         u.profile_picture,
+         u.created_at,
+         u.updated_at,
+         u.last_login,
+         u.is_admin,
+         COALESCE(us.mfa_enabled, FALSE) AS mfa_enabled,
+         us.mfa_secret,
+         COALESCE(us.mfa_backup_codes, '[]'::jsonb) AS mfa_backup_codes,
+         COALESCE(us.passkeys, '[]'::jsonb) AS passkeys,
+         COALESCE(conv.conversation_count, 0) AS conversation_count,
+         COALESCE(msg.message_count, 0) AS message_count,
+         COALESCE(sess.session_count, 0) AS session_count
+       FROM users u
+       LEFT JOIN user_security us ON us.user_id = u.id
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS conversation_count
+         FROM conversations c
+         WHERE c.user_id = u.id
+       ) conv ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS message_count
+         FROM messages m
+         WHERE m.user_id = u.id
+       ) msg ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS session_count
+         FROM user_sessions s
+         WHERE s.user_id = u.id
+       ) sess ON TRUE
+       ORDER BY u.created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+
+    return result.rows.map(row => ({
+      id: row.id,
+      email: row.email,
+      displayName: row.display_name,
+      profilePicture: row.profile_picture,
+      createdAt: new Date(row.created_at),
+      updatedAt: new Date(row.updated_at),
+      lastLogin: row.last_login ? new Date(row.last_login) : undefined,
+      isAdmin: row.is_admin,
+      mfaEnabled: row.mfa_enabled,
+      mfaSecret: row.mfa_secret,
+      mfaBackupCodes: row.mfa_backup_codes
+        ? (typeof row.mfa_backup_codes === 'string' ? JSON.parse(row.mfa_backup_codes) : row.mfa_backup_codes)
+        : [],
+      passkeys: row.passkeys
+        ? (typeof row.passkeys === 'string' ? JSON.parse(row.passkeys) : row.passkeys)
+        : [],
+      conversationCount: Number(row.conversation_count || 0),
+      messageCount: Number(row.message_count || 0),
+      sessionCount: Number(row.session_count || 0),
+    }));
+  }
+
+  static async updateUser(id: string, updates: Partial<Pick<User, 'displayName' | 'profilePicture' | 'lastLogin' | 'isAdmin'>>): Promise<void> {
     const fields = [];
     const values = [];
     let paramIndex = 1;
@@ -126,6 +326,11 @@ export class UserService {
       values.push(updates.lastLogin);
     }
 
+    if (updates.isAdmin !== undefined) {
+      fields.push(`is_admin = $${paramIndex++}`);
+      values.push(updates.isAdmin);
+    }
+
     if (fields.length === 0) return;
 
     values.push(id);
@@ -138,6 +343,135 @@ export class UserService {
   static async isFirstUser(): Promise<boolean> {
     const result = await query('SELECT COUNT(*) as count FROM users');
     return parseInt(result.rows[0].count) === 0;
+  }
+
+  /**
+   * Bootstrap safety: if there is exactly one user and zero admins,
+   * promote that single user to admin.
+   */
+  static async ensureSingleUserBootstrapAdmin(userId: string): Promise<boolean> {
+    const result = await query(
+      `WITH stats AS (
+         SELECT
+           COUNT(*)::int AS total_users,
+           COUNT(*) FILTER (WHERE is_admin = TRUE)::int AS total_admins
+         FROM users
+       )
+       UPDATE users
+       SET is_admin = TRUE
+       WHERE id = $1
+         AND (SELECT total_users FROM stats) = 1
+         AND (SELECT total_admins FROM stats) = 0
+       RETURNING id`,
+      [userId]
+    );
+
+    return result.rows.length > 0;
+  }
+}
+
+export class AppSettingsService {
+  private static async ensureTable(): Promise<void> {
+    await query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
+        is_private BOOLEAN NOT NULL DEFAULT FALSE,
+        allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+
+    await query(`INSERT INTO app_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING`);
+  }
+
+  private static normalizeAllowedEmails(allowedEmails: string[]): string[] {
+    const normalized = allowedEmails
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => !!e);
+
+    return Array.from(new Set(normalized));
+  }
+
+  static async getSettings(): Promise<AppSettings> {
+    await this.ensureTable();
+
+    const result = await query(
+      `SELECT is_private, allowed_emails, updated_at, updated_by
+       FROM app_settings
+       WHERE id = TRUE`
+    );
+
+    const row = result.rows[0];
+    const allowedEmailsRaw = row?.allowed_emails
+      ? (typeof row.allowed_emails === 'string' ? JSON.parse(row.allowed_emails) : row.allowed_emails)
+      : [];
+
+    return {
+      isPrivate: !!row?.is_private,
+      allowedEmails: this.normalizeAllowedEmails(Array.isArray(allowedEmailsRaw) ? allowedEmailsRaw : []),
+      updatedAt: row?.updated_at ? new Date(row.updated_at) : new Date(),
+      updatedBy: row?.updated_by || undefined,
+    };
+  }
+
+  static async updateSettings(
+    updates: Partial<Pick<AppSettings, 'isPrivate' | 'allowedEmails'>>,
+    updatedBy?: string
+  ): Promise<void> {
+    await this.ensureTable();
+
+    const fields: string[] = ['updated_at = NOW()'];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (updates.isPrivate !== undefined) {
+      fields.push(`is_private = $${paramIndex++}`);
+      values.push(updates.isPrivate);
+    }
+
+    if (updates.allowedEmails !== undefined) {
+      const normalized = this.normalizeAllowedEmails(updates.allowedEmails);
+      fields.push(`allowed_emails = $${paramIndex++}`);
+      values.push(JSON.stringify(normalized));
+    }
+
+    if (updatedBy) {
+      fields.push(`updated_by = $${paramIndex++}`);
+      values.push(updatedBy);
+    }
+
+    await query(
+      `UPDATE app_settings
+       SET ${fields.join(', ')}
+       WHERE id = TRUE`,
+      values
+    );
+  }
+
+  static async canAccessByEmail(email: string): Promise<boolean> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const settings = await this.getSettings();
+
+    if (!settings.isPrivate) {
+      return true;
+    }
+
+    if (settings.allowedEmails.includes(normalizedEmail)) {
+      return true;
+    }
+
+    const adminMatch = await query(
+      `SELECT is_admin FROM users WHERE lower(email) = lower($1) LIMIT 1`,
+      [normalizedEmail]
+    );
+
+    if (adminMatch.rows[0]?.is_admin === true) {
+      return true;
+    }
+
+    const countResult = await query(`SELECT COUNT(*)::int AS count FROM users`);
+    return Number(countResult.rows[0]?.count || 0) === 0;
   }
 }
 

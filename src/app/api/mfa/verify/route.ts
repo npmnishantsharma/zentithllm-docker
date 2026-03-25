@@ -3,6 +3,7 @@ import { getKey, setKey, deleteKey } from '@/lib/keyv';
 import { SessionUser } from '@/lib/session';
 import { TOTP, Secret } from 'otpauth';
 import { randomBytes } from 'crypto';
+import { UserSecurityService } from '@/lib/database';
 
 /**
  * Verify TOTP code using OTPAuth library and enable MFA for the user
@@ -86,6 +87,15 @@ export async function POST(request: NextRequest) {
     // Store updated user data in Redis
     await setKey(`session:${sessionId}`, updatedUserData, 24 * 60 * 60 * 1000);
 
+    // Store in Database permanently
+    if (userData.userId) {
+      await UserSecurityService.updateSecurity(userData.userId, {
+        mfaEnabled: true,
+        mfaSecret: pendingMfa.secret,
+        mfaBackupCodes: backupCodes.map((code: string) => ({ code, used: false }))
+      });
+    }
+
     // Delete pending MFA setup
     await deleteKey(`mfa:pending:${sessionId}`);
 
@@ -97,7 +107,7 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('[API] MFA Verify Error:', error);
     return NextResponse.json(
-      { error: 'Internal Server Error', message: error.message },
+      { error: 'Internal Server Error' },
       { status: 500 }
     );
   }

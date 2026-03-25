@@ -2,8 +2,9 @@
 'use server';
 
 import { cookies } from 'next/headers';
-import { UserService, SessionService } from '@/lib/database';
+import { UserService, SessionService, UserSecurityService, AppSettingsService } from '@/lib/database';
 import { randomBytes } from 'crypto';
+import { setKey } from '@/lib/keyv';
 
 /**
  * Generate a secure session ID
@@ -18,6 +19,18 @@ function generateSessionId(): string {
  */
 export async function createUserSession(userData: any) {
   try {
+    if (!userData?.email) {
+      return { success: false, error: 'Missing user email for session creation' };
+    }
+
+    const canAccess = await AppSettingsService.canAccessByEmail(userData.email);
+    if (!canAccess) {
+      return {
+        success: false,
+        error: 'This app is private. Your email is not on the allow list.',
+      };
+    }
+
     // Check if this is the first user
     const isFirst = await UserService.isFirstUser();
 
@@ -37,11 +50,21 @@ export async function createUserSession(userData: any) {
       user = await UserService.createUser(
         userData.email,
         userData.displayName,
-        userData.profilePicture
+        userData.profilePicture,
+        !!userData.isAdmin
       );
     } else {
       // Update last login
       await UserService.updateUser(user.id, { lastLogin: new Date() });
+    }
+
+    const promotedAsBootstrapAdmin = await UserService.ensureSingleUserBootstrapAdmin(user.id);
+    if (promotedAsBootstrapAdmin) {
+      const refreshedUser = await UserService.getUserById(user.id);
+      if (refreshedUser) {
+        user = refreshedUser;
+      }
+      console.log('[Session] Bootstrap admin recovery applied for user:', user.email);
     }
 
     // Create session in Redis
@@ -50,6 +73,11 @@ export async function createUserSession(userData: any) {
       email: user.email,
       profilePicture: user.profilePicture,
       isAdmin: user.isAdmin,
+      passkeys: userData.passkeys || [],
+      mfaEnabled: userData.mfaEnabled || false,
+      mfaSecret: userData.mfaSecret,
+      mfaBackupCodes: userData.mfaBackupCodes || [],
+      mfaEnabledAt: userData.mfaEnabledAt,
     });
 
     // Set HttpOnly cookie (accessible only by the app/server)
@@ -206,23 +234,92 @@ export async function getUserInfoWithCode(code: string) {
 
     // Create session in Redis and set HttpOnly cookie
     if (data.user) {
-      const sessionResult = await createUserSession({
-        userId: data.user.id || data.user.userId,
-        displayName: data.user.displayName,
-        email: data.user.email,
-        profilePicture: data.user.profilePicture,
+      const canAccess = await AppSettingsService.canAccessByEmail(data.user.email || '');
+      if (!canAccess) {
+        return {
+          success: false,
+          error: 'This app is private. Your email is not on the allow list.',
+        };
+      }
+
+      let user = await UserService.getUserByEmail(data.user.email);
+      if (!user) {
+        const shouldBeAdmin = await UserService.isFirstUser();
+        user = await UserService.createUser(
+          data.user.email,
+          data.user.displayName,
+          data.user.profilePicture,
+          shouldBeAdmin
+        );
+      } else {
+        await UserService.updateUser(user.id, { lastLogin: new Date() });
+      }
+
+      // Check MFA/Passkey security
+      const security = await UserSecurityService.getSecurity(user.id);
+      
+      const sessionData = {
+        userId: user.id || data.user.id || data.user.userId,
+        displayName: user.displayName || data.user.displayName,
+        email: user.email || data.user.email,
+        profilePicture: user.profilePicture || data.user.profilePicture,
         loginTime: new Date().toISOString(),
-        ...data.user, // Include all user data
-      });
+        isAdmin: user.isAdmin,
+        passkeys: security?.passkeys || [],
+        mfaEnabled: security?.mfaEnabled || false,
+        mfaSecret: security?.mfaSecret,
+        mfaBackupCodes: security?.mfaBackupCodes || [],
+        ...data.user,
+      };
+
+      if (security?.mfaEnabled || (security?.passkeys && security.passkeys.length > 0)) {
+        // Require MFA or Passkey
+        const tempSessionId = generateSessionId();
+        await setKey(`temp_login:${tempSessionId}`, sessionData, 10 * 60 * 1000); // 10 minutes
+
+        return { 
+          success: true, 
+          requireVerification: true, 
+          tempSessionId, 
+          mfaEnabled: security?.mfaEnabled,
+          passkeysEnabled: security?.passkeys && security.passkeys.length > 0 
+        };
+      }
+
+      const sessionResult = await createUserSession(sessionData);
 
       if (!sessionResult.success) {
         throw new Error('Failed to create session: ' + sessionResult.error);
       }
+      
+      return { success: true, data };
     }
 
     return { success: true, data };
   } catch (error: any) {
     console.error('NexusLLM UserInfo Error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+export async function verifyTempLoginWithMfa(tempSessionId: string) {
+  try {
+    const { getKey } = await import('@/lib/keyv');
+    const sessionData = await getKey(`temp_login:${tempSessionId}`);
+    
+    if (!sessionData) {
+      return { success: false, error: 'Login session expired or invalid' };
+    }
+    
+    const sessionResult = await createUserSession(sessionData);
+
+    if (!sessionResult.success) {
+      return { success: false, error: 'Failed to create session: ' + sessionResult.error };
+    }
+    
+    return { success: true };
+  } catch (error: any) {
+    console.error('MFA Verification Error:', error.message);
     return { success: false, error: error.message };
   }
 }

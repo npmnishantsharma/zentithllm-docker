@@ -102,6 +102,44 @@ redis-cli
 - Redis runs without password (local access only)
 - Session cookies are HttpOnly and secure
 - No external database connections
+- API traffic encryption is enforced via HTTPS in production middleware
+
+### API Transport Encryption
+
+- In production, API routes require HTTPS (`426` returned for non-HTTPS API calls)
+- To force this in non-production environments, set:
+
+```bash
+ENFORCE_HTTPS_API=true
+```
+
+- Deploy behind TLS (Nginx/Caddy/Cloudflare/Vercel) so browser-to-server `/api/*` traffic is encrypted.
+
+### Encrypted API Response Payloads (optional)
+
+For selected endpoints, clients can request encrypted JSON payloads by sending:
+
+`x-response-enc-key: <base64-32-byte-key>`
+
+Current endpoint support includes MFA status (`/api/mfa/status`).
+
+## GraphQL API (multi-user ready)
+
+The app now routes client API interactions through `/api/graphql` with:
+
+- Persisted queries (`doc_id` = SHA-256 of query document)
+- Query cost limiting
+- Schema stitching / federation-ready modular SDL
+- Server-side query result caching (Redis via Keyv)
+
+### GraphQL env controls
+
+- `GRAPHQL_REQUIRE_PERSISTED=true` → require valid persisted `doc_id` lookup
+- `GRAPHQL_MAX_COST=180` → max allowed query cost
+- `GRAPHQL_CACHE_ENABLED=true` → enable/disable server-side GraphQL cache
+- `GRAPHQL_CACHE_TTL_SECONDS=20` → cache TTL for query responses
+- `GRAPHQL_SERVER_ENC_KEY=<base64-32-byte-key>` → optional server-only key to encrypt cached GraphQL responses in Redis (not sent to client)
+- `NEXT_PUBLIC_GRAPHQL_SERVER_ENC_KEY=<same-base64-key>` → required in browser client to decrypt encrypted GraphQL response envelopes
 
 ## 📝 System Requirements
 

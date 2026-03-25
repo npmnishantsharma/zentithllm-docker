@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getKey, setKey, deleteKey } from '@/lib/keyv';
+import { getKey, setKey } from '@/lib/keyv';
 import { SessionUser } from '@/lib/session';
+import { UserSecurityService } from '@/lib/database';
+import { encryptApiPayload } from '@/lib/api-encryption';
 
 /**
  * Get MFA status, disable MFA, or regenerate backup codes
@@ -27,18 +29,51 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({
+    const security = userData.userId
+      ? await UserSecurityService.getSecurity(userData.userId)
+      : null;
+
+    const sessionMfaEnabled = (userData as any).mfaEnabled || false;
+    const sessionBackupCodes = ((userData as any).mfaBackupCodes || []).filter(
+      (c: any) => !c.used
+    ).length;
+
+    const effectiveMfaEnabled = security ? security.mfaEnabled : sessionMfaEnabled;
+    const effectiveBackupCodesAvailable = security
+      ? (security.mfaBackupCodes || []).filter((c: any) => !c.used).length
+      : sessionBackupCodes;
+
+    // Keep session in sync with persisted security state so UI always reflects latest profile settings.
+    if (security && ((userData as any).mfaEnabled !== security.mfaEnabled)) {
+      await setKey(
+        `session:${sessionId}`,
+        {
+          ...userData,
+          mfaEnabled: security.mfaEnabled,
+          mfaSecret: security.mfaSecret,
+          mfaBackupCodes: security.mfaBackupCodes || [],
+        },
+        24 * 60 * 60 * 1000
+      );
+    }
+
+    const responsePayload = {
       success: true,
-      mfaEnabled: (userData as any).mfaEnabled || false,
+      mfaEnabled: effectiveMfaEnabled,
       mfaEnabledAt: (userData as any).mfaEnabledAt,
-      backupCodesAvailable: ((userData as any).mfaBackupCodes || []).filter(
-        (c: any) => !c.used
-      ).length,
-    });
+      backupCodesAvailable: effectiveBackupCodesAvailable,
+    };
+
+    const responseEncKey = request.headers.get('x-response-enc-key');
+    if (responseEncKey) {
+      return NextResponse.json(encryptApiPayload(responsePayload, responseEncKey));
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (error: any) {
     console.error('[API] MFA Status Error:', error);
     return NextResponse.json(
-      { error: 'Internal Server Error', message: error.message },
+      { error: 'Internal Server Error' },
       { status: 500 }
     );
   }
@@ -49,7 +84,7 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const { action, password } = await request.json();
+    const { action } = await request.json();
 
     if (!action) {
       return NextResponse.json(
@@ -90,6 +125,14 @@ export async function POST(request: NextRequest) {
 
       await setKey(`session:${sessionId}`, updatedUserData, 24 * 60 * 60 * 1000);
 
+      if (userData.userId) {
+        await UserSecurityService.updateSecurity(userData.userId, {
+          mfaEnabled: false,
+          mfaSecret: null as any,
+          mfaBackupCodes: []
+        });
+      }
+
       return NextResponse.json({
         success: true,
         message: 'MFA has been disabled',
@@ -101,12 +144,20 @@ export async function POST(request: NextRequest) {
         crypto.randomBytes(4).toString('hex').toUpperCase()
       );
 
+      const mfaBackupCodes = newBackupCodes.map((code: string) => ({ code, used: false }));
+
       const updatedUserData = {
         ...userData,
-        mfaBackupCodes: newBackupCodes.map((code: string) => ({ code, used: false })),
+        mfaBackupCodes
       };
 
       await setKey(`session:${sessionId}`, updatedUserData, 24 * 60 * 60 * 1000);
+
+      if (userData.userId) {
+        await UserSecurityService.updateSecurity(userData.userId, {
+          mfaBackupCodes
+        });
+      }
 
       return NextResponse.json({
         success: true,
@@ -122,7 +173,7 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('[API] MFA Action Error:', error);
     return NextResponse.json(
-      { error: 'Internal Server Error', message: error.message },
+      { error: 'Internal Server Error' },
       { status: 500 }
     );
   }

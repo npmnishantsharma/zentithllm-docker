@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getKey } from "@/lib/keyv";
+import { getKey, setKey } from "@/lib/keyv";
+import { UserSecurityService } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,25 @@ export async function GET(request: NextRequest) {
     }
 
     const session = sessionData as Record<string, any>;
-    const passkeys = session.passkeys || [];
+    const sessionPasskeys = Array.isArray(session.passkeys) ? session.passkeys : [];
+
+    const security = session.userId
+      ? await UserSecurityService.getSecurity(session.userId)
+      : null;
+
+    const passkeys = security ? (security.passkeys || []) : sessionPasskeys;
+
+    // Sync cached session with persisted passkeys for consistent reads.
+    if (security && JSON.stringify(sessionPasskeys) !== JSON.stringify(passkeys)) {
+      await setKey(
+        `session:${sessionId}`,
+        {
+          ...session,
+          passkeys,
+        },
+        24 * 60 * 60 * 1000
+      );
+    }
 
     // Return passkeys without sensitive data
     const safePasskeys = passkeys.map((p: any) => ({
@@ -40,7 +59,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("List passkeys error:", error);
     return NextResponse.json(
-      { success: false, error: String(error) },
+      { success: false, error: "Internal Server Error" },
       { status: 500 }
     );
   }

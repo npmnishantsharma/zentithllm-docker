@@ -16,6 +16,15 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN DEFAULT FALSE
 );
 
+-- Create user security table for persistent MFA/passkey settings
+CREATE TABLE IF NOT EXISTS user_security (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    mfa_enabled BOOLEAN DEFAULT FALSE,
+    mfa_secret TEXT,
+    mfa_backup_codes JSONB DEFAULT '[]'::jsonb,
+    passkeys JSONB DEFAULT '[]'::jsonb
+);
+
 -- Create sessions table for tracking user sessions (long-term)
 CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -50,6 +59,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_user_security_user_id ON user_security(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);

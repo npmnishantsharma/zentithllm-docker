@@ -1,7 +1,8 @@
 import { verifyAuthenticationResponse } from "@simplewebauthn/server";
 import { NextRequest, NextResponse } from "next/server";
-import { getKey, setKey, getKeyvInstance } from "@/lib/keyv";
+import { getKey, setKey, getKeyvInstance, deleteKey } from "@/lib/keyv";
 import { cookies } from "next/headers";
+import { createUserSession } from "@/app/login/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ function base64urlToBuffer(base64url: string): Uint8Array {
 
 export async function POST(request: NextRequest) {
   try {
-    const { credential, challengeId } = await request.json();
+    const { credential, challengeId, token } = await request.json();
 
     if (!credential?.id) {
       return NextResponse.json(
@@ -42,6 +43,97 @@ export async function POST(request: NextRequest) {
     }
 
     const options = storedChallenge;
+
+    // Temp-token flow: Nexus sign-in completed, now require passkey before issuing app session cookie
+    if (token) {
+      const tempSessionData = await getKey(`temp_login:${token}`);
+      if (!tempSessionData || typeof tempSessionData !== "object") {
+        await deleteKey(`passkey:auth:challenge:${challengeId}`);
+        return NextResponse.json(
+          { success: false, error: "Temporary login token expired or invalid" },
+          { status: 401 }
+        );
+      }
+
+      const tempSession = tempSessionData as Record<string, any>;
+      const passkey = tempSession.passkeys?.find((pk: any) => pk.credentialID === credential.id);
+
+      if (!passkey) {
+        await deleteKey(`passkey:auth:challenge:${challengeId}`);
+        return NextResponse.json(
+          { success: false, error: "Passkey not found for this account" },
+          { status: 404 }
+        );
+      }
+
+      let verification;
+      try {
+        const storedPublicKeyBuffer = Buffer.from(passkey.credentialPublicKey, "base64");
+        verification = await verifyAuthenticationResponse({
+          response: credential,
+          expectedChallenge: options.challenge,
+          expectedOrigin:
+            process.env.NEXT_PUBLIC_APP_URL ||
+            "https://supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+          expectedRPID:
+            process.env.NEXT_PUBLIC_APP_URL?.split("//")[1] ||
+            "supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+          credential: {
+            id: credential.id,
+            publicKey: storedPublicKeyBuffer,
+            counter: passkey.counter,
+            transports: passkey.transports,
+          },
+          requireUserVerification: false,
+        });
+      } catch (error) {
+        await deleteKey(`passkey:auth:challenge:${challengeId}`);
+        return NextResponse.json(
+          { success: false, error: "Credential verification failed" },
+          { status: 400 }
+        );
+      }
+
+      if (!verification.verified) {
+        await deleteKey(`passkey:auth:challenge:${challengeId}`);
+        return NextResponse.json(
+          { success: false, error: "Credential could not be verified" },
+          { status: 400 }
+        );
+      }
+
+      // Update passkey counter
+      if (verification.authenticationInfo?.newCounter !== undefined) {
+        if (verification.authenticationInfo.newCounter <= passkey.counter) {
+          await deleteKey(`passkey:auth:challenge:${challengeId}`);
+          return NextResponse.json(
+            { success: false, error: "Authentication failed: counter check" },
+            { status: 400 }
+          );
+        }
+        passkey.counter = verification.authenticationInfo.newCounter;
+      }
+
+      // Persist updated passkeys inside temp payload and finalize login session
+      await setKey(`temp_login:${token}`, tempSession, 10 * 60 * 1000);
+      const sessionResult = await createUserSession(tempSession);
+
+      if (!sessionResult.success) {
+        await deleteKey(`passkey:auth:challenge:${challengeId}`);
+        return NextResponse.json(
+          { success: false, error: `Failed to create session: ${sessionResult.error}` },
+          { status: 500 }
+        );
+      }
+
+      await deleteKey(`passkey:auth:challenge:${challengeId}`);
+      await deleteKey(`temp_login:${token}`);
+
+      return NextResponse.json({
+        success: true,
+        message: "Passkey verification successful",
+      });
+    }
 
     // Look up user by credentialId - also try alternative formats
     const credentialIdKey = `passkey:credentialId:${credential.id}`;
@@ -174,7 +266,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Authenticate verify error:", error);
     return NextResponse.json(
-      { success: false, error: String(error) },
+      { success: false, error: "Internal Server Error" },
       { status: 500 }
     );
   }

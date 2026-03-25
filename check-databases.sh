@@ -26,13 +26,23 @@ print_error() {
 echo "🔍 Checking Zentith LLM database status..."
 echo
 
-# Check PostgreSQL service
+# Check PostgreSQL service/cluster
 echo "PostgreSQL:"
-if sudo service postgresql status >/dev/null 2>&1; then
-    print_status "✅ Service is running"
+if command -v pg_lsclusters >/dev/null 2>&1 && pg_lsclusters --no-header 2>/dev/null | awk '{print $4}' | grep -q "online"; then
+    print_status "✅ At least one PostgreSQL cluster is online"
+elif sudo service postgresql status >/dev/null 2>&1; then
+    print_warning "⚠️ PostgreSQL service wrapper is active, but no online cluster detected"
 else
-    print_error "❌ Service is not running"
-    echo "   Start with: sudo service postgresql start"
+    print_error "❌ PostgreSQL service is not running"
+    echo "   Start with: npm run db:start"
+fi
+
+if command -v pg_isready >/dev/null 2>&1; then
+    if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+        print_status "✅ TCP endpoint is accepting connections on 127.0.0.1:5432"
+    else
+        print_error "❌ TCP endpoint is not accepting connections on 127.0.0.1:5432"
+    fi
 fi
 
 # Test PostgreSQL connection

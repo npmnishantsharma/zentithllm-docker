@@ -34,7 +34,19 @@ export async function GET() {
     }
 
     const data = await response.json();
-    return NextResponse.json(data);
+    const safeModels = Array.isArray(data?.models)
+      ? data.models.map((m: any) => ({
+          id: m?.id,
+          name: m?.name,
+          provider: m?.provider,
+          description: m?.description,
+        }))
+      : [];
+
+    return NextResponse.json({
+      success: true,
+      models: safeModels,
+    });
   } catch (error: any) {
     console.error('List Models Proxy Error:', error);
     return NextResponse.json(

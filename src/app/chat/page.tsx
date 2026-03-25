@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   Plus, 
   MessageSquare, 
@@ -32,6 +33,7 @@ import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { SettingsDialog } from '@/components/SettingsDialog';
+import { graphqlRequest } from '@/lib/graphql-client';
 
 type Message = {
   id: string;
@@ -58,6 +60,7 @@ const MOCK_MESSAGES: Record<string, Message[]> = {
 };
 
 export default function ChatPage() {
+  const router = useRouter();
   const isMobile = useIsMobile();
   const [activeConvId, setActiveConvId] = useState<string>('2');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -74,57 +77,92 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (isMobile !== undefined) {
-      setSidebarOpen(!isMobile);
+      const savedState = localStorage.getItem('nexus_sidebar_open');
+      if (savedState !== null && !isMobile) {
+        setSidebarOpen(savedState === 'true');
+      } else {
+        setSidebarOpen(!isMobile);
+      }
     }
   }, [isMobile]);
+
+  const toggleSidebar = (open: boolean) => {
+    setSidebarOpen(open);
+    if (!isMobile) {
+      localStorage.setItem('nexus_sidebar_open', String(open));
+    }
+  };
 
   // Fetch user profile from session
   useEffect(() => {
     async function fetchUserProfile() {
       try {
-        // Try to fetch from the profile API (uses session ID from cookie)
-        const response = await fetch('/api/profile');
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.data) {
-            // Map API response to user data
-            const profileData = {
-              userId: data.data.uid,
-              displayName: data.data.displayName,
-              email: data.data.email,
-              photoURL: data.data.photoURL,
-              username: data.data.username,
-              role: data.data.role,
-              userTag: data.data.userTag || { 
-                name: 'User', 
-                color: '#19c37d',
-                emoji: '👤'
-              }
+        const result = await graphqlRequest<{
+          profile: {
+            success: boolean;
+            data?: {
+              uid?: string;
+              displayName?: string;
+              email?: string;
+              photoURL?: string;
+              username?: string;
+              role?: string;
+              userTag?: { name?: string; color?: string; emoji?: string };
             };
-            setUserData(profileData);
-            console.log('[Chat] User profile loaded from session:', profileData);
-            return;
+          };
+        }>(`
+          query ChatProfile {
+            profile {
+              success
+              data {
+                uid
+                displayName
+                email
+                photoURL
+                username
+                role
+                userTag {
+                  name
+                  color
+                  emoji
+                }
+              }
+            }
           }
+        `);
+
+        const data = result.profile;
+        if (data.success && data.data) {
+          const profileData = {
+            userId: data.data.uid,
+            displayName: data.data.displayName,
+            email: data.data.email,
+            photoURL: data.data.photoURL,
+            username: data.data.username,
+            role: data.data.role,
+            userTag: data.data.userTag || {
+              name: 'User',
+              color: '#19c37d',
+              emoji: '👤',
+            },
+          };
+          setUserData(profileData);
+          console.log('[Chat] User profile loaded from session:', profileData);
+          return;
+        } else {
+          console.log('[Chat] Failed to fetch profile. Redirecting to login.');
+          router.replace('/login');
+          return;
         }
       } catch (error) {
-        console.error('[Chat] Failed to fetch profile from API:', error);
-      }
-      
-      // Fallback to localStorage if API fails
-      const savedUser = localStorage.getItem('nexus_user_data');
-      if (savedUser) {
-        try {
-          setUserData(JSON.parse(savedUser));
-          console.log('[Chat] User profile loaded from localStorage');
-        } catch (e) {
-          console.error("Failed to parse user data from localStorage", e);
-        }
+        console.error('[Chat] Error fetching profile:', error);
+        router.replace('/login');
       }
     }
 
     fetchUserProfile();
     setMessages(MOCK_MESSAGES[activeConvId] || []);
-  }, [activeConvId]);
+  }, [activeConvId, router]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -205,7 +243,7 @@ export default function ChatPage() {
       {isMobile && sidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/60 z-40 animate-in fade-in duration-200"
-          onClick={() => setSidebarOpen(false)}
+          onClick={() => toggleSidebar(false)}
         />
       )}
 
@@ -213,7 +251,7 @@ export default function ChatPage() {
         "bg-[#0d0d0d] border border-white/10 transition-all duration-300 flex flex-col shrink-0 z-50",
         "mt-[10px] mb-[10px] ml-[10px] rounded-2xl overflow-hidden",
         isMobile ? "fixed inset-y-0 left-0" : "relative",
-        sidebarOpen ? "w-72" : "w-0 overflow-hidden border-none"
+        sidebarOpen ? "w-72" : "w-0 !m-0 overflow-hidden border-none"
       )}>
         <div className="p-4 flex items-center justify-between">
           <Button 
@@ -226,7 +264,7 @@ export default function ChatPage() {
             </div>
             New Chat
           </Button>
-          <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => setSidebarOpen(false)}>
+          <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => toggleSidebar(false)}>
             <PanelLeftClose size={18} />
           </Button>
         </div>
@@ -285,12 +323,15 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      <main className="flex-1 flex flex-col min-w-0 bg-background relative">
+      <main className={cn(
+        "flex-1 flex flex-col min-w-0 bg-[#0d0d0d] relative overflow-hidden transition-all duration-300",
+        sidebarOpen ? "border border-white/10 m-[10px] rounded-2xl" : "m-0 border-none rounded-none"
+      )}>
         
-        <header className="h-14 flex items-center px-4 border-b border-white/5 bg-background/50 backdrop-blur-md sticky top-0 z-30">
+        <header className="h-14 flex items-center px-4 border-b border-white/5 bg-[#0d0d0d]/80 backdrop-blur-md sticky top-0 z-30">
           <div className="flex items-center gap-3">
             {!sidebarOpen && (
-              <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => setSidebarOpen(true)}>
+              <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => toggleSidebar(true)}>
                 <Menu size={20} />
               </Button>
             )}
@@ -445,7 +486,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div className="p-4 sm:pb-8 bg-gradient-to-t from-background via-background to-transparent z-20">
+        <div className="p-4 sm:pb-8 bg-gradient-to-t from-[#0d0d0d] via-[#0d0d0d] to-transparent z-20">
           <div className="max-w-3xl mx-auto relative">
             <div className="relative flex flex-col bg-[#2f2f2f] border border-white/5 rounded-2xl overflow-hidden focus-within:border-white/20 transition-all shadow-xl">
               

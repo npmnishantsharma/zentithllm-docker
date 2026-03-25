@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getKey, setKey, getKeyvInstance } from "@/lib/keyv";
+import { UserSecurityService } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,13 @@ export async function POST(request: NextRequest) {
     // Update session
     await setKey(`session:${sessionId}`, session, 86400 * 1000); // 24-hour TTL
 
+    // Persist in database as source of truth
+    if (session.userId) {
+      await UserSecurityService.updateSecurity(session.userId, {
+        passkeys: session.passkeys,
+      });
+    }
+
     // Clean up credentialId index
     if (passkeyToDelete?.credentialID) {
       const keyv = await getKeyvInstance();
@@ -56,7 +64,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Delete passkey error:", error);
     return NextResponse.json(
-      { success: false, error: String(error) },
+      { success: false, error: "Internal Server Error" },
       { status: 500 }
     );
   }

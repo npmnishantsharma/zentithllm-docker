@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack -p 9002",
+    "dev": "next dev --turbopack -p 80",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
     "build": "NODE_ENV=production next build",
@@ -13,9 +13,9 @@
     "db:setup": "./setup-databases.sh",
     "db:check": "./check-databases.sh",
     "db:remove": "./remove-databases.sh",
-    "db:start": "sudo service postgresql start && sudo service redis-server start",
+    "db:start": "bash ./start-databases.sh",
     "db:stop": "sudo service postgresql stop && sudo service redis-server stop",
-    "db:status": "sudo service postgresql status && sudo service redis-server status",
+    "db:status": "bash ./check-databases.sh",
     "db:logs": "sudo journalctl -u postgresql -f",
     "db:redis-logs": "sudo journalctl -u redis-server -f",
     "db:reset": "sudo -u postgres dropdb zentith && sudo -u postgres createdb zentith && sudo -u postgres psql -d zentith -f init.sql"
@@ -55,6 +55,7 @@
     "embla-carousel-react": "^8.6.0",
     "firebase": "^11.9.1",
     "genkit": "^1.28.0",
+    "graphql": "^16.13.2",
     "katex": "^0.16.11",
     "keyv": "^5.6.0",
     "lucide-react": "^0.475.0",

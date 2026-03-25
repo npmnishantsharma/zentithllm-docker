@@ -46,6 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
+import { graphqlRequest } from "@/lib/graphql-client";
 
 const NAV_ITEMS = [
   { id: "general", label: "General", icon: Settings },
@@ -99,15 +100,26 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
       // Load MFA status from API
       loadMfaStatus();
+      // Load passkeys so security profile reflects current state immediately
+      loadPasskeys();
     }
   }, [open]);
 
   const loadMfaStatus = async () => {
     try {
-      const response = await fetch('/api/mfa/status');
-      if (response.ok) {
-        const data = await response.json();
-        setMfaEnabled(data.mfaEnabled);
+      const data = await graphqlRequest<{
+        mfaStatus: { success: boolean; mfaEnabled?: boolean };
+      }>(`
+        query MfaStatus {
+          mfaStatus {
+            success
+            mfaEnabled
+          }
+        }
+      `);
+
+      if (data.mfaStatus?.success) {
+        setMfaEnabled(Boolean(data.mfaStatus.mfaEnabled));
       }
     } catch (error) {
       console.error('Failed to load MFA status:', error);
@@ -124,9 +136,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const startMfaSetup = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/mfa/setup', { method: 'POST' });
-      if (response.ok) {
-        const data = await response.json();
+      const result = await graphqlRequest<{
+        mfaSetup: { success: boolean; secret?: string; otpauthUrl?: string; error?: string };
+      }>(`
+        mutation MfaSetup {
+          mfaSetup {
+            success
+            secret
+            otpauthUrl
+            error
+          }
+        }
+      `);
+
+      const data = result.mfaSetup;
+      if (data?.success) {
         setSecret(data.secret);
         setQrCode(data.otpauthUrl);
         setMfaSetupModal(true);
@@ -136,7 +160,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       } else {
         toast({
           title: "Error",
-          description: "Failed to start MFA setup",
+          description: data?.error || "Failed to start MFA setup",
           variant: "destructive",
         });
       }
@@ -164,14 +188,24 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/mfa/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: verifyCode }),
-      });
+      const result = await graphqlRequest<{
+        mfaVerify: { success: boolean; backupCodes?: string[]; error?: string };
+      }>(
+        `
+          mutation MfaVerify($code: String!) {
+            mfaVerify(code: $code) {
+              success
+              backupCodes
+              error
+            }
+          }
+        `,
+        { code: verifyCode }
+      );
 
-      if (response.ok) {
-        const data = await response.json();
+      const data = result.mfaVerify;
+
+      if (data.success) {
         setBackupCodes(data.backupCodes);
         setMfaStep('done');
         setMfaEnabled(true);
@@ -180,10 +214,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           description: "Your account is now protected with multi-factor authentication",
         });
       } else {
-        const error = await response.json();
         toast({
           title: "Verification failed",
-          description: error.error,
+          description: data.error || 'Verification failed',
           variant: "destructive",
         });
       }
@@ -206,13 +239,18 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/mfa/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'disable' }),
-      });
+      const result = await graphqlRequest<{
+        mfaDisable: { success: boolean; error?: string };
+      }>(`
+        mutation MfaDisable {
+          mfaDisable {
+            success
+            error
+          }
+        }
+      `);
 
-      if (response.ok) {
+      if (result.mfaDisable?.success) {
         setMfaEnabled(false);
         toast({
           title: "MFA Disabled",
@@ -221,7 +259,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       } else {
         toast({
           title: "Error",
-          description: "Failed to disable MFA",
+          description: result.mfaDisable?.error || "Failed to disable MFA",
           variant: "destructive",
         });
       }
@@ -285,33 +323,48 @@ Once a code is used, it cannot be reused.`;
 
     setPasskeyLoading(true);
     try {
-      // Get registration options from server
-      const optionsResponse = await fetch('/api/passkey/register-options', {
-        method: 'POST',
-      });
+      const optionsData = await graphqlRequest<{
+        passkeyRegisterOptions: { success: boolean; optionsJSON?: string | null; error?: string };
+      }>(`
+        mutation PasskeyRegisterOptions {
+          passkeyRegisterOptions {
+            success
+            optionsJSON
+            error
+          }
+        }
+      `);
 
-      if (!optionsResponse.ok) {
-        throw new Error('Failed to get registration options');
+      const optionResult = optionsData.passkeyRegisterOptions;
+      if (!optionResult?.success || !optionResult.optionsJSON) {
+        throw new Error(optionResult?.error || 'Failed to get registration options');
       }
 
-      const { options } = await optionsResponse.json();
+      const options = JSON.parse(optionResult.optionsJSON);
 
       // Start registration with browser API
       const credential = await startRegistration(options);
 
       // Verify credential on server
-      const verifyResponse = await fetch('/api/passkey/register-verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          credential,
+      const verifyData = await graphqlRequest<{
+        passkeyRegisterVerify: { success: boolean; error?: string };
+      }>(
+        `
+          mutation PasskeyRegisterVerify($credentialJSON: String!, $deviceName: String!) {
+            passkeyRegisterVerify(credentialJSON: $credentialJSON, deviceName: $deviceName) {
+              success
+              error
+            }
+          }
+        `,
+        {
+          credentialJSON: JSON.stringify(credential),
           deviceName: passkeyName,
-        }),
-      });
+        }
+      );
 
-      if (verifyResponse.ok) {
-        const data = await verifyResponse.json();
-        setPasskeys([...passkeys, data.passkey]);
+      if (verifyData.passkeyRegisterVerify.success) {
+        await loadPasskeys();
         setPasskeyModal(false);
         setPasskeyName('');
         toast({
@@ -319,8 +372,7 @@ Once a code is used, it cannot be reused.`;
           description: `${passkeyName} has been added to your account`,
         });
       } else {
-        const error = await verifyResponse.json();
-        throw new Error(error.error || 'Verification failed');
+        throw new Error(verifyData.passkeyRegisterVerify.error || 'Verification failed');
       }
     } catch (error: any) {
       console.error('Passkey registration error:', error);
@@ -336,10 +388,23 @@ Once a code is used, it cannot be reused.`;
 
   const loadPasskeys = async () => {
     try {
-      const response = await fetch('/api/passkey/list');
-      if (response.ok) {
-        const data = await response.json();
-        setPasskeys(data.passkeys || []);
+      const data = await graphqlRequest<{
+        passkeyList: { success: boolean; passkeys?: any[] };
+      }>(`
+        query PasskeyList {
+          passkeyList {
+            success
+            passkeys {
+              id
+              deviceName
+              createdAt
+              transports
+            }
+          }
+        }
+      `);
+      if (data.passkeyList?.success) {
+        setPasskeys(data.passkeyList.passkeys || []);
       }
     } catch (error) {
       console.error('Failed to load passkeys:', error);
@@ -352,20 +417,28 @@ Once a code is used, it cannot be reused.`;
     }
 
     try {
-      const response = await fetch('/api/passkey/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: passkeyId }),
-      });
+      const result = await graphqlRequest<{
+        passkeyDelete: { success: boolean; error?: string };
+      }>(
+        `
+          mutation PasskeyDelete($id: String!) {
+            passkeyDelete(id: $id) {
+              success
+              error
+            }
+          }
+        `,
+        { id: passkeyId }
+      );
 
-      if (response.ok) {
+      if (result.passkeyDelete?.success) {
         setPasskeys(passkeys.filter((p) => p.id !== passkeyId));
         toast({
           title: "Passkey deleted",
           description: `${passkeyName} has been removed from your account`,
         });
       } else {
-        throw new Error('Failed to delete passkey');
+        throw new Error(result.passkeyDelete?.error || 'Failed to delete passkey');
       }
     } catch (error) {
       console.error('Passkey deletion error:', error);

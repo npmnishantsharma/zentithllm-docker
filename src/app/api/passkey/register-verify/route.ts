@@ -1,6 +1,7 @@
 import { verifyRegistrationResponse } from "@simplewebauthn/server";
 import { NextRequest, NextResponse } from "next/server";
 import { getKey, setKey, getKeyvInstance } from "@/lib/keyv";
+import { UserSecurityService } from "@/lib/database";
 
 export const dynamic = "force-dynamic";
 
@@ -86,6 +87,13 @@ export async function POST(request: NextRequest) {
     // Update session in Redis
     await setKey(`session:${sessionId}`, session, 86400 * 1000); // 24-hour TTL
 
+    // Store in Database permanently
+    if (userId) {
+      await UserSecurityService.updateSecurity(userId, {
+        passkeys: session.passkeys
+      });
+    }
+
     // Create index for credential ID lookup during authentication
     await keyv.set(
       `passkey:credentialId:${credential.id}`,
@@ -108,7 +116,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Register verify error:", error);
     return NextResponse.json(
-      { success: false, error: String(error) },
+      { success: false, error: "Internal Server Error" },
       { status: 500 }
     );
   }
