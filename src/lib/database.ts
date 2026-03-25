@@ -78,6 +78,10 @@ export class UserSecurityService {
   }
 
   static async getSecurity(userId: string): Promise<UserSecurity | null> {
+    const cacheKey = `cache:security:${userId}`;
+    const cached = await getKey<UserSecurity>(cacheKey);
+    if (cached) return cached;
+
     await this.ensureTable();
     const result = await query(
       `SELECT user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys FROM user_security WHERE user_id = $1`,
@@ -87,13 +91,16 @@ export class UserSecurityService {
       return null;
     }
     const row = result.rows[0];
-    return {
+    const security = {
       userId: row.user_id,
       mfaEnabled: row.mfa_enabled,
       mfaSecret: row.mfa_secret,
       mfaBackupCodes: row.mfa_backup_codes ? (typeof row.mfa_backup_codes === 'string' ? JSON.parse(row.mfa_backup_codes) : row.mfa_backup_codes) : [],
       passkeys: row.passkeys ? (typeof row.passkeys === 'string' ? JSON.parse(row.passkeys) : row.passkeys) : [],
     };
+
+    await setKey(cacheKey, security, 5 * 60 * 1000); // 5 mins cache
+    return security;
   }
 
   static async updateSecurity(userId: string, updates: Partial<Pick<UserSecurity, 'mfaEnabled' | 'mfaSecret' | 'mfaBackupCodes' | 'passkeys'>>): Promise<void> {
@@ -142,6 +149,9 @@ export class UserSecurityService {
       `UPDATE user_security SET ${fields.join(', ')} WHERE user_id = $${paramIndex}`,
       values
     );
+
+    // Invalidate cache
+    await deleteKey(`cache:security:${userId}`);
   }
 }
 
@@ -169,6 +179,10 @@ export class UserService {
   }
 
   static async getUserByEmail(email: string): Promise<User | null> {
+    const cacheKey = `cache:user:email:${email}`;
+    const cached = await getKey<User>(cacheKey);
+    if (cached) return { ...cached, createdAt: new Date(cached.createdAt), updatedAt: new Date(cached.updatedAt), lastLogin: cached.lastLogin ? new Date(cached.lastLogin) : undefined };
+
     const result = await query(
       `SELECT id, email, display_name, profile_picture, created_at, updated_at, last_login, is_admin
        FROM users WHERE email = $1`,
@@ -178,7 +192,7 @@ export class UserService {
     if (result.rows.length === 0) return null;
 
     const row = result.rows[0];
-    return {
+    const user = {
       id: row.id,
       email: row.email,
       displayName: row.display_name,
@@ -188,9 +202,16 @@ export class UserService {
       lastLogin: row.last_login ? new Date(row.last_login) : undefined,
       isAdmin: row.is_admin,
     };
+
+    await setKey(cacheKey, user, 5 * 60 * 1000);
+    return user;
   }
 
   static async getUserById(id: string): Promise<User | null> {
+    const cacheKey = `cache:user:id:${id}`;
+    const cached = await getKey<User>(cacheKey);
+    if (cached) return { ...cached, createdAt: new Date(cached.createdAt), updatedAt: new Date(cached.updatedAt), lastLogin: cached.lastLogin ? new Date(cached.lastLogin) : undefined };
+
     const result = await query(
       `SELECT id, email, display_name, profile_picture, created_at, updated_at, last_login, is_admin
        FROM users WHERE id = $1`,
@@ -200,7 +221,7 @@ export class UserService {
     if (result.rows.length === 0) return null;
 
     const row = result.rows[0];
-    return {
+    const user = {
       id: row.id,
       email: row.email,
       displayName: row.display_name,
@@ -210,6 +231,9 @@ export class UserService {
       lastLogin: row.last_login ? new Date(row.last_login) : undefined,
       isAdmin: row.is_admin,
     };
+
+    await setKey(cacheKey, user, 5 * 60 * 1000);
+    return user;
   }
 
   static async listUsers(limit: number = 200): Promise<User[]> {
@@ -338,6 +362,13 @@ export class UserService {
       `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramIndex}`,
       values
     );
+
+    // Invalidate caches
+    await deleteKey(`cache:user:id:${id}`);
+    const result = await query(`SELECT email FROM users WHERE id = $1`, [id]);
+    if (result.rows.length > 0) {
+      await deleteKey(`cache:user:email:${result.rows[0].email}`);
+    }
   }
 
   static async isFirstUser(): Promise<boolean> {
@@ -394,6 +425,10 @@ export class AppSettingsService {
   }
 
   static async getSettings(): Promise<AppSettings> {
+    const cacheKey = 'cache:app_settings';
+    const cached = await getKey<AppSettings>(cacheKey);
+    if (cached) return { ...cached, updatedAt: new Date(cached.updatedAt) };
+
     await this.ensureTable();
 
     const result = await query(
@@ -407,12 +442,15 @@ export class AppSettingsService {
       ? (typeof row.allowed_emails === 'string' ? JSON.parse(row.allowed_emails) : row.allowed_emails)
       : [];
 
-    return {
+    const settings = {
       isPrivate: !!row?.is_private,
       allowedEmails: this.normalizeAllowedEmails(Array.isArray(allowedEmailsRaw) ? allowedEmailsRaw : []),
       updatedAt: row?.updated_at ? new Date(row.updated_at) : new Date(),
       updatedBy: row?.updated_by || undefined,
     };
+
+    await setKey(cacheKey, settings, 60 * 60 * 1000); // 1 hour
+    return settings;
   }
 
   static async updateSettings(
@@ -447,6 +485,8 @@ export class AppSettingsService {
        WHERE id = TRUE`,
       values
     );
+
+    await deleteKey('cache:app_settings');
   }
 
   static async canAccessByEmail(email: string): Promise<boolean> {

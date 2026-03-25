@@ -10,7 +10,11 @@ import { Pool } from 'pg';
  * - Data that needs complex queries and relationships
  */
 
-const pool = new Pool({
+declare global {
+  var _pgPool: Pool | undefined;
+}
+
+const pool = global._pgPool || new Pool({
   host: process.env.POSTGRES_HOST || 'localhost',
   port: parseInt(process.env.POSTGRES_PORT || '5432'),
   database: process.env.POSTGRES_DB || 'zentith',
@@ -20,6 +24,10 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
 });
+
+if (process.env.NODE_ENV !== 'production') {
+  global._pgPool = pool;
+}
 
 // Handle pool errors
 pool.on('error', (err) => {

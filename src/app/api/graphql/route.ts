@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import {
   buildSchema,
   graphql,
@@ -8,8 +8,14 @@ import {
   type FragmentDefinitionNode,
   type SelectionSetNode,
 } from 'graphql';
-import { getKey, setKey } from '@/lib/keyv';
+import { getKey, setKey, deleteKey, getKeyvInstance } from '@/lib/keyv';
 import { decryptApiPayload, encryptApiPayload, type EncryptedApiPayload } from '@/lib/api-encryption';
+import { UserSecurityService } from '@/lib/database';
+import { SessionUser } from '@/lib/session';
+import { TOTP, Secret } from 'otpauth';
+import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from "@simplewebauthn/server";
+import { isoUint8Array } from '@simplewebauthn/server/helpers';
+import { createUserSession } from '@/app/login/actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -265,35 +271,14 @@ function parseJsonSafe(value?: string | null): any {
 }
 
 function buildRoot(request: NextRequest, responseSetCookies: string[]) {
-  const proxyApi = async (path: string, init?: { method?: 'GET' | 'POST'; body?: any }) => {
-    const url = new URL(path, request.url);
-    const method = init?.method || 'GET';
+  const getSessionId = () => {
+    return request.cookies.get('sessionId')?.value || request.headers.get('X-Session-Id') || '';
+  };
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
-        ...(request.headers.get('cookie') ? { cookie: request.headers.get('cookie') as string } : {}),
-      },
-      body: method === 'POST' ? JSON.stringify(init?.body ?? {}) : undefined,
-      cache: 'no-store',
-    });
-
-    const setCookie = response.headers.get('set-cookie');
-    if (setCookie) {
-      responseSetCookies.push(setCookie);
-    }
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      return {
-        success: false,
-        error: data?.error || data?.message || `Request failed with status ${response.status}`,
-        message: data?.message,
-      };
-    }
-
-    return data;
+  const getSessionData = async () => {
+    const sessionId = getSessionId();
+    if (!sessionId) return null;
+    return await getKey<any>(`session:${sessionId}`);
   };
 
   return {
@@ -301,65 +286,467 @@ function buildRoot(request: NextRequest, responseSetCookies: string[]) {
       sdl: stitchedSchemaSDL,
     }),
 
-    profile: async () => proxyApi('/api/profile'),
-    mfaStatus: async () => proxyApi('/api/mfa/status'),
-    passkeyList: async () => proxyApi('/api/passkey/list'),
+    profile: async () => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'User is not logged in' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found or expired' };
 
-    mfaSetup: async () => proxyApi('/api/mfa/setup', { method: 'POST' }),
-    mfaVerify: async ({ code }: { code: string }) => proxyApi('/api/mfa/verify', { method: 'POST', body: { code } }),
-    mfaDisable: async () => proxyApi('/api/mfa/status', { method: 'POST', body: { action: 'disable' } }),
+      const safeProfile = {
+        userId: userData.userId,
+        uid: userData.uid ?? userData.userId,
+        displayName: userData.displayName,
+        email: userData.email,
+        photoURL: userData.photoURL,
+        profilePicture: userData.profilePicture,
+        username: userData.username,
+        role: userData.role,
+        userTag: userData.userTag,
+        sessionId,
+      };
+
+      return { success: true, data: safeProfile, profile: safeProfile };
+    },
+
+    mfaStatus: async () => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'User is not logged in' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found or expired' };
+
+      const security = userData.userId ? await UserSecurityService.getSecurity(userData.userId) : null;
+      const sessionMfaEnabled = userData.mfaEnabled || false;
+      const sessionBackupCodes = (userData.mfaBackupCodes || []).filter((c: any) => !c.used).length;
+
+      const effectiveMfaEnabled = security ? security.mfaEnabled : sessionMfaEnabled;
+      const effectiveBackupCodesAvailable = security
+        ? (security.mfaBackupCodes || []).filter((c: any) => !c.used).length
+        : sessionBackupCodes;
+
+      if (security && userData.mfaEnabled !== security.mfaEnabled) {
+        await setKey(`session:${sessionId}`, {
+          ...userData,
+          mfaEnabled: security.mfaEnabled,
+          mfaSecret: security.mfaSecret,
+          mfaBackupCodes: security.mfaBackupCodes || [],
+        }, 24 * 60 * 60 * 1000);
+      }
+
+      return {
+        success: true,
+        mfaEnabled: effectiveMfaEnabled,
+        mfaEnabledAt: userData.mfaEnabledAt,
+        backupCodesAvailable: effectiveBackupCodesAvailable,
+      };
+    },
+
+    passkeyList: async () => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'User is not logged in' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found' };
+
+      const sessionPasskeys = Array.isArray(userData.passkeys) ? userData.passkeys : [];
+      const security = userData.userId ? await UserSecurityService.getSecurity(userData.userId) : null;
+      const passkeys = security ? (security.passkeys || []) : sessionPasskeys;
+
+      if (security && JSON.stringify(sessionPasskeys) !== JSON.stringify(passkeys)) {
+        await setKey(`session:${sessionId}`, { ...userData, passkeys }, 24 * 60 * 60 * 1000);
+      }
+
+      return {
+        success: true,
+        passkeys: passkeys.map((p: any) => ({
+          id: p.id,
+          deviceName: p.deviceName,
+          createdAt: p.createdAt,
+          transports: p.transports,
+        })),
+      };
+    },
+
+    mfaSetup: async () => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'User is not logged in' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found or expired' };
+
+      const totp = new TOTP({
+        issuer: 'Zentith LLM',
+        label: userData.email || userData.displayName || 'User',
+        algorithm: 'SHA1',
+        digits: 6,
+        period: 30,
+      });
+
+      const otpauthUrl = totp.toString();
+      const secret = totp.secret.base32;
+
+      await setKey(`mfa:pending:${sessionId}`, {
+        secret,
+        otpInstance: otpauthUrl,
+        createdAt: new Date().toISOString(),
+      }, 10 * 60 * 1000);
+
+      return {
+        success: true,
+        secret,
+        otpauthUrl,
+        message: 'MFA secret generated. Scan the QR code or enter the secret manually.',
+      };
+    },
+
+    mfaVerify: async ({ code }: { code: string }) => {
+      if (!code || code.trim().length !== 6 || !/^\d{6}$/.test(code)) {
+        return { success: false, error: 'Verification code must be a 6-digit number' };
+      }
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'User is not logged in' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found or expired' };
+
+      const pendingMfa = await getKey<any>(`mfa:pending:${sessionId}`);
+      if (!pendingMfa) return { success: false, error: 'No pending MFA setup found. Please generate a new secret.' };
+
+      const totp = new TOTP({
+        issuer: 'Zentith LLM',
+        label: userData.email || userData.displayName || 'User',
+        algorithm: 'SHA1',
+        digits: 6,
+        period: 30,
+        secret: Secret.fromBase32(pendingMfa.secret),
+      });
+
+      const isValid = totp.validate({ token: code, window: 1 }) !== null;
+      if (!isValid) return { success: false, error: 'Invalid verification code. Please try again.' };
+
+      const backupCodes = Array.from({ length: 10 }, () => randomBytes(4).toString('hex').toUpperCase());
+      const backupCodesMapped = backupCodes.map((code: string) => ({ code, used: false }));
+
+      await setKey(`session:${sessionId}`, {
+        ...userData,
+        mfaEnabled: true,
+        mfaSecret: pendingMfa.secret,
+        mfaBackupCodes: backupCodesMapped,
+        mfaEnabledAt: new Date().toISOString(),
+      }, 24 * 60 * 60 * 1000);
+
+      if (userData.userId) {
+        await UserSecurityService.updateSecurity(userData.userId, {
+          mfaEnabled: true,
+          mfaSecret: pendingMfa.secret,
+          mfaBackupCodes: backupCodesMapped
+        });
+      }
+      await deleteKey(`mfa:pending:${sessionId}`);
+
+      return { success: true, message: 'MFA has been successfully enabled', backupCodes };
+    },
+
+    mfaDisable: async () => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'User is not logged in' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found or expired' };
+
+      await setKey(`session:${sessionId}`, {
+        ...userData,
+        mfaEnabled: false,
+        mfaSecret: undefined,
+        mfaBackupCodes: undefined,
+        mfaEnabledAt: undefined,
+      }, 24 * 60 * 60 * 1000);
+
+      if (userData.userId) {
+        await UserSecurityService.updateSecurity(userData.userId, {
+          mfaEnabled: false,
+          mfaSecret: null as any,
+          mfaBackupCodes: []
+        });
+      }
+      return { success: true, message: 'MFA has been disabled' };
+    },
 
     passkeyRegisterOptions: async () => {
-      const data = await proxyApi('/api/passkey/register-options', { method: 'POST' });
-      return {
-        ...data,
-        optionsJSON: data?.options ? JSON.stringify(data.options) : null,
-      };
-    },
-    passkeyRegisterVerify: async ({ credentialJSON, deviceName }: { credentialJSON: string; deviceName: string }) => {
-      const credential = parseJsonSafe(credentialJSON);
-      return proxyApi('/api/passkey/register-verify', {
-        method: 'POST',
-        body: { credential, deviceName },
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'Not authenticated' };
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found' };
+
+      const userEmail = userData.email || userData.displayName || "user";
+      const userId = userData.userId || sessionId;
+
+      const options = await generateRegistrationOptions({
+        rpID: process.env.NEXT_PUBLIC_APP_URL?.split("//")[1] || "supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+        rpName: "Zentith LLM",
+        userID: isoUint8Array.fromUTF8String(userId),
+        userName: userEmail,
+        attestationType: "direct",
+        authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
       });
+
+      const keyv = await getKeyvInstance();
+      await keyv.set(`passkey:challenge:${sessionId}`, options, 600000);
+
+      return { success: true, optionsJSON: JSON.stringify(options) };
     },
-    passkeyDelete: async ({ id }: { id: string }) => proxyApi('/api/passkey/delete', { method: 'POST', body: { id } }),
+
+    passkeyRegisterVerify: async ({ credentialJSON, deviceName }: { credentialJSON: string; deviceName: string }) => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'Not authenticated' };
+      const credential = parseJsonSafe(credentialJSON);
+
+      const keyv = await getKeyvInstance();
+      const storedChallenge = await keyv.get(`passkey:challenge:${sessionId}`);
+      if (!storedChallenge) return { success: false, error: 'Challenge not found or expired' };
+
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found' };
+
+      let verification;
+      try {
+        verification = await verifyRegistrationResponse({
+          response: credential,
+          expectedChallenge: storedChallenge.challenge,
+          expectedOrigin: process.env.NEXT_PUBLIC_APP_URL || "https://supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+          expectedRPID: process.env.NEXT_PUBLIC_APP_URL?.split("//")[1] || "supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+          requireUserVerification: false,
+        });
+      } catch (error) {
+        return { success: false, error: 'Credential verification failed' };
+      }
+
+      if (!verification.verified) return { success: false, error: 'Credential could not be verified' };
+
+      const passkeys = userData.passkeys || [];
+      const credentialPublicKey = verification.registrationInfo?.credential.publicKey;
+      const newPasskey = {
+        id: credential.id,
+        credentialID: credential.id,
+        credentialPublicKey: credentialPublicKey ? Buffer.from(credentialPublicKey).toString("base64") : "",
+        counter: verification.registrationInfo?.credential.counter || 0,
+        transports: credential.response.transports,
+        deviceName: deviceName || "Passkey",
+        createdAt: new Date().toISOString(),
+      };
+
+      passkeys.push(newPasskey);
+      userData.passkeys = passkeys;
+      await setKey(`session:${sessionId}`, userData, 86400 * 1000);
+
+      if (userData.userId) {
+        await UserSecurityService.updateSecurity(userData.userId, { passkeys: userData.passkeys });
+      }
+
+      await keyv.set(`passkey:credentialId:${credential.id}`, sessionId, 86400 * 1000);
+      await keyv.delete(`passkey:challenge:${sessionId}`);
+
+      return { success: true, message: 'Passkey registered successfully' };
+    },
+
+    passkeyDelete: async ({ id }: { id: string }) => {
+      const sessionId = getSessionId();
+      if (!sessionId) return { success: false, error: 'Not authenticated' };
+      if (!id) return { success: false, error: 'Passkey ID required' };
+
+      const userData = await getSessionData();
+      if (!userData) return { success: false, error: 'Session not found' };
+
+      const passkeys = userData.passkeys || [];
+      const passkeyToDelete = passkeys.find((p: any) => p.id === id);
+      userData.passkeys = passkeys.filter((p: any) => p.id !== id);
+      await setKey(`session:${sessionId}`, userData, 86400 * 1000);
+
+      if (userData.userId) {
+        await UserSecurityService.updateSecurity(userData.userId, { passkeys: userData.passkeys });
+      }
+      if (passkeyToDelete?.credentialID) {
+        const keyv = await getKeyvInstance();
+        await keyv.delete(`passkey:credentialId:${passkeyToDelete.credentialID}`);
+      }
+      return { success: true, message: 'Passkey deleted successfully' };
+    },
 
     passkeyAuthenticateOptions: async ({ token }: { token?: string }) => {
-      const data = await proxyApi('/api/passkey/authenticate-options', {
-        method: 'POST',
-        body: token ? { token } : {},
+      let allowCredentials: any[] | undefined;
+      if (token) {
+        const tempSession = await getKey<any>(`temp_login:${token}`);
+        if (!tempSession) return { success: false, error: 'Login verification token expired or invalid' };
+        const passkeys = (tempSession.passkeys || []) as any[];
+        if (!passkeys.length) return { success: false, error: 'No registered passkeys found for this account' };
+        allowCredentials = passkeys.filter((pk) => pk?.credentialID).map((pk) => ({ id: pk.credentialID, transports: pk.transports }));
+      }
+
+      const options = await generateAuthenticationOptions({
+        rpID: process.env.NEXT_PUBLIC_APP_URL?.split("//")[1] || "supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+        userVerification: "preferred",
+        allowCredentials,
       });
-      return {
-        ...data,
-        optionsJSON: data?.options ? JSON.stringify(data.options) : null,
-      };
-    },
-    passkeyAuthenticateVerify: async ({
-      credentialJSON,
-      challengeId,
-      token,
-    }: {
-      credentialJSON: string;
-      challengeId: string;
-      token?: string;
-    }) => {
-      const credential = parseJsonSafe(credentialJSON);
-      return proxyApi('/api/passkey/authenticate-verify', {
-        method: 'POST',
-        body: {
-          credential,
-          challengeId,
-          ...(token ? { token } : {}),
-        },
-      });
+
+      const keyv = await getKeyvInstance();
+      const challengeId = Math.random().toString(36).substring(7);
+      await keyv.set(`passkey:auth:challenge:${challengeId}`, options, 600000);
+      return { success: true, challengeId, optionsJSON: JSON.stringify(options) };
     },
 
-    verifyMfaLogin: async ({ token, code }: { token: string; code: string }) =>
-      proxyApi('/api/auth/verify-mfa-login', {
-        method: 'POST',
-        body: { token, code },
-      }),
+    passkeyAuthenticateVerify: async ({ credentialJSON, challengeId, token }: { credentialJSON: string; challengeId: string; token?: string }) => {
+      const credential = parseJsonSafe(credentialJSON);
+      if (!credential?.id) return { success: false, error: 'Invalid credential' };
+
+      const keyv = await getKeyvInstance();
+      const storedChallenge = await keyv.get(`passkey:auth:challenge:${challengeId}`);
+      if (!storedChallenge) return { success: false, error: 'Challenge not found or expired' };
+
+      if (token) {
+        const tempSession = await getKey<any>(`temp_login:${token}`);
+        if (!tempSession) {
+          await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+          return { success: false, error: 'Temporary login token expired or invalid' };
+        }
+        const passkey = tempSession.passkeys?.find((pk: any) => pk.credentialID === credential.id);
+        if (!passkey) {
+          await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+          return { success: false, error: 'Passkey not found for this account' };
+        }
+
+        let verification;
+        try {
+          verification = await verifyAuthenticationResponse({
+            response: credential,
+            expectedChallenge: storedChallenge.challenge,
+            expectedOrigin: process.env.NEXT_PUBLIC_APP_URL || "https://supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+            expectedRPID: process.env.NEXT_PUBLIC_APP_URL?.split("//")[1] || "supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+            credential: { id: credential.id, publicKey: Buffer.from(passkey.credentialPublicKey, "base64"), counter: passkey.counter, transports: passkey.transports },
+            requireUserVerification: false,
+          });
+        } catch (e) {
+          await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+          return { success: false, error: 'Credential verification failed' };
+        }
+
+        if (!verification.verified) {
+          await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+          return { success: false, error: 'Credential could not be verified' };
+        }
+
+        if (verification.authenticationInfo?.newCounter !== undefined) {
+          if (verification.authenticationInfo.newCounter <= passkey.counter) {
+            await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+            return { success: false, error: 'Authentication failed: counter check' };
+          }
+          passkey.counter = verification.authenticationInfo.newCounter;
+        }
+
+        await setKey(`temp_login:${token}`, tempSession, 10 * 60 * 1000);
+        const sessionResult = await createUserSession(tempSession);
+        if (!sessionResult.success) {
+          await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+          return { success: false, error: `Failed to create session: ${sessionResult.error}` };
+        }
+
+        responseSetCookies.push(`sessionId=${sessionResult.sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+
+        await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+        await deleteKey(`temp_login:${token}`);
+        return { success: true, message: 'Passkey verification successful' };
+      }
+
+      let storedSessionId = await keyv.get(`passkey:credentialId:${credential.id}`);
+      if (!storedSessionId) {
+        await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+        return { success: false, error: 'Passkey not found' };
+      }
+
+      const sessionData = await getKey<any>(`session:${storedSessionId}`);
+      if (!sessionData) {
+        await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+        return { success: false, error: 'User session not found' };
+      }
+
+      const passkey = sessionData.passkeys?.find((pk: any) => pk.credentialID === credential.id);
+      if (!passkey) {
+        await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+        return { success: false, error: 'Passkey not found in user session' };
+      }
+
+      let verification;
+      try {
+        verification = await verifyAuthenticationResponse({
+          response: credential,
+          expectedChallenge: storedChallenge.challenge,
+          expectedOrigin: process.env.NEXT_PUBLIC_APP_URL || "https://supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+          expectedRPID: process.env.NEXT_PUBLIC_APP_URL?.split("//")[1] || "supreme-couscous-v6495rwrj6r52pr9x-9002.app.github.dev",
+          credential: { id: credential.id, publicKey: Buffer.from(passkey.credentialPublicKey, "base64"), counter: passkey.counter, transports: passkey.transports },
+          requireUserVerification: false,
+        });
+      } catch (e) {
+        await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+        return { success: false, error: 'Credential verification failed' };
+      }
+
+      if (!verification.verified) {
+        await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+        return { success: false, error: 'Credential could not be verified' };
+      }
+
+      if (verification.authenticationInfo?.newCounter !== undefined) {
+        if (verification.authenticationInfo.newCounter <= passkey.counter) {
+          await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+          return { success: false, error: 'Authentication failed: counter check' };
+        }
+        passkey.counter = verification.authenticationInfo.newCounter;
+      }
+
+      await setKey(`session:${storedSessionId}`, sessionData, 86400 * 1000);
+      await keyv.delete(`passkey:auth:challenge:${challengeId}`);
+
+      responseSetCookies.push(`sessionId=${storedSessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+
+      return {
+        success: true,
+        message: 'Passkey authentication successful',
+        user: { userId: sessionData.userId, displayName: sessionData.displayName, email: sessionData.email, photoURL: sessionData.photoURL, role: sessionData.role },
+      };
+    },
+
+    verifyMfaLogin: async ({ token, code }: { token: string; code: string }) => {
+      if (!token || !code) return { success: false, error: 'Token and code are required' };
+      const tempSessionData = await getKey<any>(`temp_login:${token}`);
+      if (!tempSessionData) return { success: false, error: 'Login session expired or invalid' };
+
+      if (tempSessionData.mfaEnabled && tempSessionData.mfaSecret) {
+        const totp = new TOTP({
+          issuer: 'Zentith LLM',
+          algorithm: 'SHA1',
+          digits: 6,
+          period: 30,
+          secret: Secret.fromBase32(tempSessionData.mfaSecret),
+        });
+
+        const isValid = totp.validate({ token: code, window: 1 }) !== null;
+        let isValidBackup = false;
+        if (!isValid && tempSessionData.mfaBackupCodes) {
+          const backupIndex = tempSessionData.mfaBackupCodes.findIndex((bc: any) => bc.code === code && !bc.used);
+          if (backupIndex !== -1) {
+            isValidBackup = true;
+            tempSessionData.mfaBackupCodes[backupIndex].used = true;
+            await setKey(`temp_login:${token}`, tempSessionData, 10 * 60 * 1000);
+            if (tempSessionData.userId) {
+              await UserSecurityService.updateSecurity(tempSessionData.userId, { mfaBackupCodes: tempSessionData.mfaBackupCodes });
+            }
+          }
+        }
+
+        if (!isValid && !isValidBackup) return { success: false, error: 'Invalid verification code' };
+      }
+
+      const sessionResult = await createUserSession(tempSessionData);
+      if (!sessionResult.success) return { success: false, error: 'Failed to create session: ' + sessionResult.error };
+
+      await deleteKey(`temp_login:${token}`);
+      responseSetCookies.push(`sessionId=${sessionResult.sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+      return { success: true };
+    },
   };
 }
 

@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
     // Explicitly set cookie in this route response.
     // Do not rely solely on server-action cookie mutation when called from route handlers.
     const cookieStore = await cookies();
-    cookieStore.set('sessionId', sessionResult.sessionId, {
+    cookieStore.set('sessionId', sessionResult.sessionId || '', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
