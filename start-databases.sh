@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Zentith LLM - Reliable database startup script
-# Starts PostgreSQL clusters (not only the meta service) and Redis
+# Starts PostgreSQL clusters (not only the meta service)
 
 set -e
 
@@ -43,23 +43,11 @@ else
   sudo service postgresql start
 fi
 
-print_status "Starting Redis..."
-sudo service redis-server start
-
 if command -v pg_isready >/dev/null 2>&1; then
   if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
     print_status "✅ PostgreSQL is accepting connections on 127.0.0.1:5432"
   else
     print_error "❌ PostgreSQL is not accepting connections on 127.0.0.1:5432"
-    exit 1
-  fi
-fi
-
-if command -v redis-cli >/dev/null 2>&1; then
-  if redis-cli ping 2>/dev/null | grep -q "PONG"; then
-    print_status "✅ Redis is accepting connections on localhost:6379"
-  else
-    print_error "❌ Redis is not accepting connections on localhost:6379"
     exit 1
   fi
 fi

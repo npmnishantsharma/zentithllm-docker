@@ -1,81 +1,102 @@
-import Keyv from 'keyv';
-import KeyvRedis from '@keyv/redis';
-import { createClient } from 'redis';
+import { query } from './postgres';
 
-/**
- * Initialize Keyv instance with Redis backend
- * 
- * Redis is the best choice for:
- * - Fast caching and sessions
- * - Real-time applications and chat systems
- * - Expiring data with TTL
- * - Distributed systems
- * 
- * Ensure Redis is running:
- * - Docker: docker run -d -p 6379:6379 redis:latest
- * - Local: brew install redis && redis-server
- * - Environment variable: REDIS_URL (defaults to redis://localhost:6379)
- */
+class PostgresKeyValueStore {
+  private ready: Promise<void> | null = null;
 
-let keyv: Keyv;
-let redisClient: ReturnType<typeof createClient>;
-
-export async function initKeyv() {
-  if (!keyv) {
-    // Use Docker Redis when available, fallback to local
-    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-    
-    try {
-      // Create Redis client
-      redisClient = createClient({
-        url: redisUrl,
-      });
-
-      // Connect to Redis
-      redisClient.on('error', (err) => {
-        console.error('[Redis] Connection error:', err.message);
-      });
-
-      redisClient.on('connect', () => {
-        console.log('[Redis] Connected to:', redisUrl);
-      });
-
-      // Wait for connection
-      await redisClient.connect();
-
-      // Initialize Keyv with Redis adapter
-      const redisStore = new KeyvRedis(redisClient);
-      keyv = new Keyv({ store: redisStore, namespace: 'zentith' });
-
-      keyv.on('error', (err) => {
-        console.error('[Keyv] Error:', err.message);
-      });
-
-      console.log('[Keyv] Initialized with Redis backend');
-    } catch (error) {
-      console.error('[Keyv] Failed to initialize Redis:', error);
-      throw error;
+  private async ensureTable(): Promise<void> {
+    if (!this.ready) {
+      this.ready = (async () => {
+        await query(`
+          CREATE TABLE IF NOT EXISTS app_kv (
+            key TEXT PRIMARY KEY,
+            value JSONB NOT NULL,
+            expires_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+          )
+        `);
+      })();
     }
+
+    await this.ready;
   }
-  return keyv;
+
+  private async removeExpired(key: string): Promise<void> {
+    await query(
+      `DELETE FROM app_kv
+       WHERE key = $1 AND expires_at IS NOT NULL AND expires_at <= NOW()`,
+      [key]
+    );
+  }
+
+  async set<T>(key: string, value: T, ttl?: number): Promise<void> {
+    await this.ensureTable();
+
+    const expiresAt = ttl ? new Date(Date.now() + ttl) : null;
+    await query(
+      `INSERT INTO app_kv (key, value, expires_at, created_at, updated_at)
+       VALUES ($1, $2::jsonb, $3, NOW(), NOW())
+       ON CONFLICT (key) DO UPDATE SET
+         value = EXCLUDED.value,
+         expires_at = EXCLUDED.expires_at,
+         updated_at = NOW()`,
+      [key, JSON.stringify(value), expiresAt]
+    );
+  }
+
+  async get<T>(key: string): Promise<T | undefined> {
+    await this.ensureTable();
+    await this.removeExpired(key);
+
+    const result = await query(
+      `SELECT value
+       FROM app_kv
+       WHERE key = $1
+         AND (expires_at IS NULL OR expires_at > NOW())
+       LIMIT 1`,
+      [key]
+    );
+
+    if (result.rows.length === 0) {
+      return undefined;
+    }
+
+    return result.rows[0].value as T;
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.ensureTable();
+    await query(`DELETE FROM app_kv WHERE key = $1`, [key]);
+  }
+
+  async clear(): Promise<void> {
+    await this.ensureTable();
+    await query(`DELETE FROM app_kv`);
+  }
+
+  async has(key: string): Promise<boolean> {
+    return (await this.get(key)) !== undefined;
+  }
 }
 
-// Initialize on module load
-let keyvInstancePromise: Promise<Keyv>;
+let keyvInstance: PostgresKeyValueStore | undefined;
+let keyvInstancePromise: Promise<PostgresKeyValueStore> | undefined;
 
-export function getKeyvInstance(): Promise<Keyv> {
+export async function initKeyv(): Promise<PostgresKeyValueStore> {
+  if (!keyvInstance) {
+    keyvInstance = new PostgresKeyValueStore();
+  }
+
+  return keyvInstance;
+}
+
+export function getKeyvInstance(): Promise<PostgresKeyValueStore> {
   if (!keyvInstancePromise) {
     keyvInstancePromise = initKeyv();
   }
+
   return keyvInstancePromise;
 }
-
-// Lazy initialized instance
-export let keyvInstance: Keyv;
-
-/**
- * Helper functions for common operations
- */
 
 export async function setKey<T>(key: string, value: T, ttl?: number): Promise<void> {
   const instance = await getKeyvInstance();
@@ -84,7 +105,7 @@ export async function setKey<T>(key: string, value: T, ttl?: number): Promise<vo
 
 export async function getKey<T>(key: string): Promise<T | undefined> {
   const instance = await getKeyvInstance();
-  return (await instance.get(key)) as T | undefined;
+  return await instance.get<T>(key);
 }
 
 export async function deleteKey(key: string): Promise<void> {
@@ -99,46 +120,33 @@ export async function clearAll(): Promise<void> {
 
 export async function hasKey(key: string): Promise<boolean> {
   const instance = await getKeyvInstance();
-  const value = await instance.get(key);
-  return value !== undefined;
+  return await instance.has(key);
 }
 
-/**
- * Increment a counter value
- */
 export async function incrementKey(key: string, amount: number = 1): Promise<number> {
   const instance = await getKeyvInstance();
-  const currentValue = (await instance.get(key)) || 0;
-  const newValue = (currentValue as number) + amount;
+  const currentValue = (await instance.get<number>(key)) || 0;
+  const newValue = currentValue + amount;
   await instance.set(key, newValue);
   return newValue;
 }
 
-/**
- * Check and set - atomic operation for existence checks
- */
 export async function checkAndSet<T>(key: string, value: T, ttl?: number): Promise<boolean> {
   if (await hasKey(key)) {
     return false;
   }
+
   await setKey(key, value, ttl);
   return true;
 }
 
-/**
- * Check if this is the first user being registered
- * Returns true if no admin has been assigned yet
- */
 export async function isFirstUser(): Promise<boolean> {
   const adminInitialized = await hasKey('system:admin:initialized');
   return !adminInitialized;
 }
 
-/**
- * Mark that the first user (as admin) has been initialized
- */
 export async function markAdminInitialized(): Promise<void> {
-  await setKey('system:admin:initialized', true, 365 * 24 * 60 * 60 * 1000); // 1 year TTL
+  await setKey('system:admin:initialized', true, 365 * 24 * 60 * 60 * 1000);
 }
 
 export default getKeyvInstance;

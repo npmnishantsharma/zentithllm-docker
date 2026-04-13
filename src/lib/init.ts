@@ -2,7 +2,7 @@ import { initDatabases } from '@/lib/database';
 
 /**
  * Initialize databases on app startup
- * This ensures PostgreSQL and Redis are connected before the app starts
+ * This ensures PostgreSQL-backed application storage is ready before the app starts
  */
 
 let initialized = false;

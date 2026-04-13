@@ -1,10 +1,10 @@
 import Link from 'next/link';
-import { MessageSquare, Settings, Shield, Sparkles, Users } from 'lucide-react';
+import { Bot, MessageSquare, Settings, Shield, Sparkles, Users } from 'lucide-react';
 import type { SessionUser } from '@/lib/session';
 
 type AdminSidebarProps = {
   sessionUser: SessionUser;
-  active: 'users' | 'settings';
+  active: 'users' | 'settings' | 'models';
 };
 
 export function AdminSidebar({ sessionUser, active }: AdminSidebarProps) {
@@ -52,6 +52,21 @@ export function AdminSidebar({ sessionUser, active }: AdminSidebarProps) {
             Settings
           </span>
           {active === 'settings' && <span className="h-2 w-2 rounded-full bg-emerald-400" />}
+        </Link>
+
+        <Link
+          href="/admin/models"
+          className={`mt-2 w-full flex items-center justify-between px-3 py-2.5 rounded-2xl text-sm border transition-colors ${
+            active === 'models'
+              ? 'bg-white/10 text-white border-white/10'
+              : 'text-white/65 border-transparent hover:bg-white/5 hover:text-white'
+          }`}
+        >
+          <span className="inline-flex items-center gap-2.5">
+            <Bot size={15} />
+            Models
+          </span>
+          {active === 'models' && <span className="h-2 w-2 rounded-full bg-emerald-400" />}
         </Link>
 
         <Link

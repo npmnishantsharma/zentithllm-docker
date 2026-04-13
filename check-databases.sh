@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Zentith LLM - Database Status Check
-# Verifies PostgreSQL and Redis are running and accessible
+# Verifies PostgreSQL is running and accessible
 
 set -e
 
@@ -58,26 +58,6 @@ else
 fi
 
 echo
-
-# Check Redis service
-echo "Redis:"
-if sudo service redis-server status >/dev/null 2>&1; then
-    print_status "✅ Service is running"
-else
-    print_error "❌ Service is not running"
-    echo "   Start with: sudo service redis-server start"
-fi
-
-# Test Redis connection
-if command -v redis-cli >/dev/null 2>&1; then
-    if redis-cli ping 2>/dev/null | grep -q "PONG"; then
-        print_status "✅ Connection successful"
-    else
-        print_error "❌ Cannot connect to Redis"
-    fi
-else
-    print_warning "⚠️  redis-cli not found"
-fi
 
 echo
 print_status "Status check complete!"

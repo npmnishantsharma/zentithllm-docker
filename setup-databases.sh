@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Zentith LLM - System Database Setup Script
-# Installs and configures PostgreSQL and Redis locally
+# Installs and configures PostgreSQL locally
 
 set -e
 
@@ -26,11 +26,6 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if running as root
-if [[ $EUID -eq 0 ]]; then
-   print_error "This script should not be run as root. Please run as a regular user with sudo access."
-   exit 1
-fi
 
 # Update package list
 print_status "Updating package list..."
@@ -40,17 +35,9 @@ sudo apt-get update --allow-unauthenticated
 print_status "Installing PostgreSQL..."
 sudo apt-get install -y postgresql postgresql-contrib --allow-unauthenticated
 
-# Install Redis
-print_status "Installing Redis..."
-sudo apt-get install -y redis-server --allow-unauthenticated
-
 # Start and enable PostgreSQL
 print_status "Starting PostgreSQL service..."
 sudo service postgresql start
-
-# Start and enable Redis
-print_status "Starting Redis service..."
-sudo service redis-server start
 
 # Configure PostgreSQL
 print_status "Configuring PostgreSQL..."
@@ -59,14 +46,36 @@ print_status "Configuring PostgreSQL..."
 sudo -u postgres psql -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" 2>/dev/null || true
 sudo -u postgres psql -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" 2>/dev/null || true
 
-# Create database and user
-sudo -u postgres psql -c "CREATE USER zentith_user WITH PASSWORD 'zentith_password';" 2>/dev/null || print_warning "User might already exist"
-sudo -u postgres psql -c "CREATE DATABASE zentith OWNER zentith_user;" 2>/dev/null || print_warning "Database might already exist"
+# Create database user if needed and always enforce expected password
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zentith_user') THEN
+        CREATE ROLE zentith_user LOGIN;
+    END IF;
+END
+$$;
+ALTER ROLE zentith_user WITH PASSWORD 'zentith_password';
+SQL
+
+# Create database if needed (CREATE DATABASE cannot run inside DO/transaction blocks)
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='zentith'" | grep -q 1; then
+        sudo -u postgres createdb -O zentith_user zentith
+else
+        print_warning "Database zentith already exists"
+fi
+
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE zentith TO zentith_user;"
 
 # Run database initialization script
 print_status "Initializing database schema..."
 sudo -u postgres psql -d zentith -f "$(dirname "$0")/init.sql" || print_error "Failed to initialize database schema"
+
+# Repair user_sessions shape for pre-existing databases
+print_status "Ensuring session table schema is current..."
+sudo -u postgres psql -d zentith -c "ALTER TABLE IF EXISTS user_sessions ADD COLUMN IF NOT EXISTS session_data JSONB NOT NULL DEFAULT '{}'::jsonb;"
+sudo -u postgres psql -d zentith -c "CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);"
+sudo -u postgres psql -d zentith -c "CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);"
 
 # Grant privileges on schema objects
 print_status "Granting schema privileges..."
@@ -74,18 +83,6 @@ sudo -u postgres psql -d zentith -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEM
 sudo -u postgres psql -d zentith -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON TABLES TO zentith_user;"
 sudo -u postgres psql -d zentith -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO zentith_user;"
 sudo -u postgres psql -d zentith -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL PRIVILEGES ON SEQUENCES TO zentith_user;"
-
-# Configure Redis
-print_status "Configuring Redis..."
-sudo cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
-
-# Enable Redis persistence
-sudo sed -i 's/# save 3600 1/save 3600 1/' /etc/redis/redis.conf
-sudo sed -i 's/# save 300 100/save 300 100/' /etc/redis/redis.conf
-sudo sed -i 's/# save 60 10000/save 60 10000/' /etc/redis/redis.conf
-
-# Restart Redis to apply changes
-sudo systemctl restart redis-server
 
 # Test connections
 print_status "Testing database connections..."
@@ -97,24 +94,14 @@ else
     print_error "❌ PostgreSQL connection failed"
 fi
 
-# Test Redis
-if redis-cli ping | grep -q "PONG"; then
-    print_status "✅ Redis connection successful"
-else
-    print_error "❌ Redis connection failed"
-fi
-
 print_status "🎉 Database setup complete!"
 print_status ""
 print_status "Database Details:"
 print_status "  PostgreSQL: localhost:5432/zentith (user: zentith_user)"
-print_status "  Redis: localhost:6379"
 print_status ""
 print_status "To start the application:"
 print_status "  npm run dev"
 print_status ""
 print_status "Management commands:"
 print_status "  PostgreSQL status: sudo systemctl status postgresql"
-print_status "  Redis status: sudo systemctl status redis-server"
 print_status "  PostgreSQL logs: sudo journalctl -u postgresql -f"
-print_status "  Redis logs: sudo journalctl -u redis-server -f"

@@ -1,12 +1,11 @@
 import { pool, query, getClient } from './postgres';
-import { getKeyvInstance, setKey, getKey, deleteKey, hasKey } from './keyv';
+import { setKey, getKey, deleteKey, hasKey } from './keyv';
 
 /**
  * Combined database service for Zentith LLM
  *
  * Strategy:
- * - Redis: Short-term storage (sessions, cache, temporary data)
- * - PostgreSQL: Long-term storage (users, conversations, messages)
+ * - PostgreSQL: Long-term storage for application data, sessions, cache, and temporary auth state
  */
 
 export interface User {
@@ -645,7 +644,7 @@ export class MessageService {
   }
 }
 
-// Session operations (Redis - short-term)
+// Session operations (PostgreSQL-backed)
 export class SessionService {
   private static readonly SESSION_PREFIX = 'session:';
   private static readonly SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
@@ -653,24 +652,71 @@ export class SessionService {
   static async createSession(userId: string, userData: any): Promise<string> {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
-
-    await setKey(sessionKey, {
+    const expiresAt = new Date(Date.now() + this.SESSION_TTL);
+    const sessionData = {
       ...userData,
       userId,
       sessionId,
       createdAt: new Date().toISOString(),
-    }, this.SESSION_TTL);
+    };
+
+    await query(
+      `INSERT INTO user_sessions (user_id, session_token, session_data, created_at, expires_at)
+       VALUES ($1, $2, $3::jsonb, NOW(), $4)
+       ON CONFLICT (session_token) DO UPDATE SET
+         user_id = EXCLUDED.user_id,
+         session_data = EXCLUDED.session_data,
+         expires_at = EXCLUDED.expires_at`,
+      [userId, sessionId, JSON.stringify(sessionData), expiresAt]
+    );
+
+    await setKey(sessionKey, sessionData, this.SESSION_TTL);
 
     return sessionId;
   }
 
   static async getSession(sessionId: string): Promise<any | null> {
     const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
-    return await getKey(sessionKey);
+    const sessionResult = await query(
+      `SELECT user_id, session_data, created_at, expires_at
+       FROM user_sessions
+       WHERE session_token = $1
+       LIMIT 1`,
+      [sessionId]
+    );
+
+    if (sessionResult.rows.length === 0) {
+      await deleteKey(sessionKey);
+      return null;
+    }
+
+    const row = sessionResult.rows[0];
+    const expiresAt = new Date(row.expires_at);
+    if (expiresAt.getTime() <= Date.now()) {
+      await this.deleteSession(sessionId);
+      return null;
+    }
+
+    const cachedSession = await getKey(sessionKey);
+    if (cachedSession) {
+      return cachedSession;
+    }
+
+    const restoredSession = {
+      ...(row.session_data || {}),
+      userId: row.user_id,
+      sessionId,
+      createdAt: row.session_data?.createdAt || row.created_at?.toISOString?.() || new Date().toISOString(),
+    };
+
+    const remainingTtl = Math.max(expiresAt.getTime() - Date.now(), 1000);
+    await setKey(sessionKey, restoredSession, remainingTtl);
+    return restoredSession;
   }
 
   static async deleteSession(sessionId: string): Promise<void> {
     const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
+    await query(`DELETE FROM user_sessions WHERE session_token = $1`, [sessionId]);
     await deleteKey(sessionKey);
   }
 
@@ -678,6 +724,14 @@ export class SessionService {
     const sessionData = await this.getSession(sessionId);
     if (sessionData) {
       const sessionKey = `${this.SESSION_PREFIX}${sessionId}`;
+      const expiresAt = new Date(Date.now() + this.SESSION_TTL);
+      await query(
+        `UPDATE user_sessions
+         SET expires_at = $2,
+             session_data = $3::jsonb
+         WHERE session_token = $1`,
+        [sessionId, expiresAt, JSON.stringify(sessionData)]
+      );
       await setKey(sessionKey, sessionData, this.SESSION_TTL);
     }
   }
@@ -715,11 +769,7 @@ export async function initDatabases() {
     await query('SELECT 1');
     console.log('[Database] PostgreSQL connected successfully');
 
-    // Initialize Redis
-    await getKeyvInstance();
-    console.log('[Database] Redis initialized successfully');
-
-    console.log('[Database] Both databases initialized successfully');
+    console.log('[Database] Application storage initialized successfully');
   } catch (error) {
     console.error('[Database] Failed to initialize databases:', error);
     throw error;

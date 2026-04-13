@@ -12,9 +12,11 @@ const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
       allowedOrigins: [
+        'localhost:3000',
+        '127.0.0.1:3000',
         'localhost:9002',
-        '*.app.github.dev', // Allows any codespace URL
-        process.env.CODESPACE_NAME + '-9002.app.github.dev' 
+        '127.0.0.1:9002',
+        '*.app.github.dev',
       ],
     },
   },

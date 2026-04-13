@@ -1,5 +1,5 @@
 /**
- * Practical Redis patterns for Keyv
+ * Practical Postgres-backed key-value patterns
  * 
  * Real-world examples for the Zentith LLM chat application
  * 

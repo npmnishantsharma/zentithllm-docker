@@ -14,7 +14,7 @@ function generateSessionId(): string {
 }
 
 /**
- * Store user session in Redis and set session cookie
+ * Store user session in PostgreSQL and set session cookie
  * Automatically makes the first user an admin
  */
 export async function createUserSession(userData: any) {
@@ -67,7 +67,7 @@ export async function createUserSession(userData: any) {
       console.log('[Session] Bootstrap admin recovery applied for user:', user.email);
     }
 
-    // Create session in Redis
+    // Create session in PostgreSQL-backed storage
     const sessionId = await SessionService.createSession(user.id, {
       displayName: user.displayName,
       email: user.email,
@@ -98,7 +98,7 @@ export async function createUserSession(userData: any) {
 }
 
 /**
- * Clear user session from Redis and remove cookie
+ * Clear user session from PostgreSQL and remove cookie
  */
 export async function logout() {
   try {
@@ -118,7 +118,7 @@ export async function logout() {
 }
 
 /**
- * Get current user session from Redis
+ * Get current user session from PostgreSQL
  */
 export async function getUserSession() {
   try {
@@ -147,12 +147,11 @@ export async function getUserSession() {
  */
 export async function clearUserSession() {
   try {
-    const { deleteKey } = await import('@/lib/keyv');
     const cookieStore = await cookies();
     const sessionId = cookieStore.get('sessionId')?.value;
 
     if (sessionId) {
-      await deleteKey(`session:${sessionId}`);
+      await SessionService.deleteSession(sessionId);
     }
 
     cookieStore.delete('sessionId');
@@ -202,7 +201,7 @@ export async function authenticateWithNexusLLM() {
 
 /**
  * Finalizes the handshake by exchanging the one-time code for user profile info.
- * Also creates a session in Redis and sets an HttpOnly cookie.
+ * Also creates a session in PostgreSQL and sets an HttpOnly cookie.
  */
 export async function getUserInfoWithCode(code: string) {
   const clientId = process.env.NEXUSLLM_CLIENT_ID;
@@ -232,7 +231,7 @@ export async function getUserInfoWithCode(code: string) {
 
     const data = await response.json();
 
-    // Create session in Redis and set HttpOnly cookie
+    // Create session in PostgreSQL and set HttpOnly cookie
     if (data.user) {
       const canAccess = await AppSettingsService.canAccessByEmail(data.user.email || '');
       if (!canAccess) {

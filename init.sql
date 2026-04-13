@@ -25,11 +25,21 @@ CREATE TABLE IF NOT EXISTS user_security (
     passkeys JSONB DEFAULT '[]'::jsonb
 );
 
+-- Generic Postgres key-value store for sessions, caches, and temporary auth data
+CREATE TABLE IF NOT EXISTS app_kv (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- Create sessions table for tracking user sessions (long-term)
 CREATE TABLE IF NOT EXISTS user_sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     session_token VARCHAR(255) UNIQUE NOT NULL,
+    session_data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     ip_address INET,
@@ -60,6 +70,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_user_security_user_id ON user_security(user_id);
+CREATE INDEX IF NOT EXISTS idx_app_kv_expires_at ON app_kv(expires_at);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);

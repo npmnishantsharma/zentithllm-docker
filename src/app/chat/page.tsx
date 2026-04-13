@@ -44,6 +44,12 @@ type Message = {
   avatar?: string;
 };
 
+type ConversationItem = {
+  id: string;
+  name: string;
+  date: string;
+};
+
 const INITIAL_CONVERSATIONS = [
   { id: '1', name: 'Wikipedia to Markdown', date: 'Today' },
   { id: '2', name: 'Android CI with Discord', date: 'Today' },
@@ -62,6 +68,7 @@ const MOCK_MESSAGES: Record<string, Message[]> = {
 export default function ChatPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
+  const [conversations, setConversations] = useState<ConversationItem[]>(INITIAL_CONVERSATIONS);
   const [activeConvId, setActiveConvId] = useState<string>('2');
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -74,6 +81,39 @@ export default function ChatPage() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const getNowConversationGroup = (): string => 'Today';
+
+  const generateUniqueChatId = (existingIds: Set<string>): string => {
+    let id = '';
+
+    do {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        id = `chat_${crypto.randomUUID()}`;
+      } else {
+        id = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      }
+    } while (existingIds.has(id));
+
+    return id;
+  };
+
+  const handleNewChat = () => {
+    setConversations((prev) => {
+      const existingIds = new Set(prev.map((conv) => conv.id));
+      const newChatId = generateUniqueChatId(existingIds);
+      const newConversation: ConversationItem = {
+        id: newChatId,
+        name: 'New Chat',
+        date: getNowConversationGroup(),
+      };
+
+      setActiveConvId(newChatId);
+      setMessages([]);
+
+      return [newConversation, ...prev];
+    });
+  };
 
   useEffect(() => {
     if (isMobile !== undefined) {
@@ -257,7 +297,7 @@ export default function ChatPage() {
           <Button 
             variant="ghost" 
             className="flex-1 mr-2 justify-start gap-3 hover:bg-white/5 text-sm font-medium h-11 px-3 rounded-lg"
-            onClick={() => setMessages([])}
+            onClick={handleNewChat}
           >
             <div className="h-6 w-6 rounded-full bg-white/10 flex items-center justify-center shrink-0">
               <Plus size={14} className="text-white" />
@@ -272,7 +312,7 @@ export default function ChatPage() {
         <ScrollArea className="flex-1 px-3">
           <div className="space-y-6 py-2">
             {['Today', 'Yesterday', 'Previous 7 Days'].map(dateGroup => {
-              const groupConvs = INITIAL_CONVERSATIONS.filter(c => c.date === dateGroup);
+              const groupConvs = conversations.filter(c => c.date === dateGroup);
               if (groupConvs.length === 0) return null;
               
               return (
@@ -337,7 +377,7 @@ export default function ChatPage() {
             )}
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-white/90 truncate max-w-[150px] sm:max-w-none">
-                {INITIAL_CONVERSATIONS.find(c => c.id === activeConvId)?.name || "New Chat"}
+                {conversations.find(c => c.id === activeConvId)?.name || "New Chat"}
               </span>
             </div>
           </div>
