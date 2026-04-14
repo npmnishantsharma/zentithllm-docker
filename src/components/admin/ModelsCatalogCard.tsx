@@ -136,7 +136,7 @@ export function ModelsCatalogCard() {
       return;
     }
 
-    router.push(`/admin/models/${encodeURIComponent(author)}/${encodeURIComponent(modelName)}`);
+    router.push(`/admin/models/${author}/${modelName}`);
   };
 
   return (

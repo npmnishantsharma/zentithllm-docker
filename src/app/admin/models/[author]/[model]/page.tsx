@@ -63,7 +63,7 @@ export default async function AdminModelDetailPage({
   const modelId = `${author}/${model}`;
 
   const detailResponse = await fetch(
-    `https://huggingface.co/api/models/${encodeURIComponent(modelId)}?blobs=true`,
+    `https://huggingface.co/api/models/${modelId}?blobs=true`,
     {
       cache: 'no-store',
       headers: { Accept: 'application/json' },
