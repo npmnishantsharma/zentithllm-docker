@@ -1,10 +1,5 @@
 
 import { NextRequest } from 'next/server';
-
-/**
- * Proxy route for the NexusLLM EventSource stream.
- * This keeps the client_id and client_secret secure on the server.
- */
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get('sessionId');

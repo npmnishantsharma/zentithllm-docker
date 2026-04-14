@@ -1,13 +1,7 @@
 "use client";
 
-import { useMemo, useState } from 'react';
-
-type GgufFile = {
-  name: string;
-  sizeBytes: number | null;
-  sizeGB: number | null;
-  downloadUrl: string;
-};
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 type ModelSummary = {
   id: string;
@@ -15,196 +9,234 @@ type ModelSummary = {
   downloads?: number;
   likes?: number;
   lastModified?: string;
-  ggufFiles: GgufFile[];
-};
-
-type MachineSpecs = {
-  platform: string;
-  arch: string;
-  cpuCores: number;
-  totalMemoryBytes: number;
-  totalMemoryGB: number;
-  gpuName?: string;
-  gpuMemoryBytes?: number;
-  gpuMemoryGB?: number;
-};
-
-type Recommendation = {
-  modelId: string;
-  fileName: string;
-  downloadUrl: string;
-  sizeBytes: number;
-  sizeGB: number | null;
-  fit: 'excellent' | 'good' | 'tight' | 'too-large';
-  reason: string;
+  tags?: string[];
+  pipelineTag?: string;
+  url: string;
 };
 
 type CatalogResponse = {
   success?: boolean;
   error?: string;
   query?: string;
-  searched?: number;
   modelsFound?: number;
-  machineSpecs?: MachineSpecs;
-  recommendation?: Recommendation | null;
+  nextCursor?: string | null;
+  hasMore?: boolean;
   models?: ModelSummary[];
 };
 
-function fitBadgeColor(fit: Recommendation['fit']): string {
-  if (fit === 'excellent') return 'bg-emerald-500/20 text-emerald-300';
-  if (fit === 'good') return 'bg-cyan-500/20 text-cyan-300';
-  if (fit === 'tight') return 'bg-amber-500/20 text-amber-300';
-  return 'bg-red-500/20 text-red-300';
-}
-
 export function ModelsCatalogCard() {
-  const [query, setQuery] = useState('gguf');
-  const [limit, setLimit] = useState('80');
-  const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<CatalogResponse | null>(null);
+  const router = useRouter();
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadedCount, setLoadedCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('Loading the first 200 GGUF models...');
+  const [hasMore, setHasMore] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const isFetchingRef = useRef(false);
+  const currentCursorRef = useRef<string | null>(null);
+  const loadedCountRef = useRef(0);
 
-  const models = useMemo(() => response?.models || [], [response]);
+  const getDisplayName = (modelId: string) => modelId.split('/')[0] || modelId;
 
-  const fetchCatalog = async () => {
-    setLoading(true);
-    setResponse(null);
+  const loadPage = async (cursor?: string | null, replace = false) => {
+    if (isFetchingRef.current) return;
+
+    isFetchingRef.current = true;
+    setIsFetchingMore(!replace);
+    setError(null);
+    setStatus(replace ? 'Loading the first 200 GGUF models...' : 'Loading 200 more GGUF models...');
 
     try {
-      const params = new URLSearchParams({
-        q: query || 'gguf',
-        limit: limit || '80',
-      });
+      const params = new URLSearchParams({ limit: '200' });
+      if (cursor) {
+        params.set('cursor', cursor);
+      }
 
       const res = await fetch(`/api/admin/models/gguf?${params.toString()}`, {
-        method: 'GET',
+        cache: 'no-store',
       });
 
       const data = (await res.json().catch(() => ({}))) as CatalogResponse;
-      if (!res.ok) {
-        setResponse({ error: data.error || 'Failed to fetch GGUF models' });
-      } else {
-        setResponse(data);
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to fetch GGUF models');
       }
-    } catch (error: any) {
-      setResponse({ error: error?.message || 'Request failed' });
-    } finally {
+
+      const pageModels = data.models || [];
+      const nextLoadedCount = replace ? pageModels.length : loadedCountRef.current + pageModels.length;
+
+      loadedCountRef.current = nextLoadedCount;
+      setModels((prev) => (replace ? pageModels : [...prev, ...pageModels]));
+      setLoadedCount(nextLoadedCount);
+      setHasMore(Boolean(data.nextCursor));
+      currentCursorRef.current = data.nextCursor || null;
+
+      setStatus(
+        data.nextCursor
+          ? `Loaded ${nextLoadedCount} model${nextLoadedCount === 1 ? '' : 's'} so far. Scroll for more.`
+          : `Loaded all ${nextLoadedCount} GGUF model${nextLoadedCount === 1 ? '' : 's'}.`
+      );
+
+      if (replace) {
+        setLoading(false);
+      }
+    } catch (fetchError: any) {
+      setError(fetchError?.message || 'Request failed');
       setLoading(false);
+    } finally {
+      isFetchingRef.current = false;
+      setIsFetchingMore(false);
     }
+  };
+
+  useEffect(() => {
+    loadedCountRef.current = 0;
+    currentCursorRef.current = null;
+    setModels([]);
+    setLoadedCount(0);
+    setHasMore(true);
+    setError(null);
+    setLoading(true);
+    void loadPage(null, true);
+    // Reload when the user clicks refresh.
+  }, [refreshToken]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = scrollContainerRef.current;
+    if (!sentinel || !root || !hasMore) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry?.isIntersecting && !isFetchingRef.current && currentCursorRef.current) {
+          void loadPage(currentCursorRef.current, false);
+        }
+      },
+      { root, rootMargin: '400px 0px', threshold: 0.01 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, models.length]);
+
+  const refreshCatalog = () => {
+    setRefreshToken((current) => current + 1);
+  };
+
+  const handleOpenModel = (model: ModelSummary) => {
+    const [author, modelName] = model.id.split('/');
+
+    if (!author || !modelName) {
+      window.open(model.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    router.push(`/admin/models/${encodeURIComponent(author)}/${encodeURIComponent(modelName)}`);
   };
 
   return (
     <div className="rounded-3xl border border-white/10 bg-[#111111] p-4 sm:p-5">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="text-sm font-semibold text-white/90">GGUF Catalog and Best-Fit Recommendation</p>
+          <p className="text-sm font-semibold text-white/90">GGUF Model Catalog</p>
           <p className="text-xs text-white/50 mt-1">
-            Fetch GGUF model details and get a recommendation based on this machine&apos;s hardware specs.
+            Load 200 GGUF models at a time from Hugging Face, then fetch the next 200 when you scroll near the bottom.
           </p>
         </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="sm:col-span-2">
-          <label className="block text-xs text-white/55 mb-1.5">Search Query</label>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/90"
-            placeholder="gguf"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-white/55 mb-1.5">Limit</label>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={limit}
-            onChange={(e) => setLimit(e.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/90"
-          />
-        </div>
-      </div>
-
-      <div className="mt-3 flex justify-end">
         <button
           type="button"
-          onClick={fetchCatalog}
+          onClick={refreshCatalog}
           disabled={loading}
           className="text-xs px-3.5 py-1.5 rounded-full border border-white/15 text-white/90 hover:bg-white/5 transition-colors disabled:opacity-40"
         >
-          {loading ? 'Fetching...' : 'Fetch GGUF Models'}
+          {loading ? 'Loading...' : 'Reload Catalog'}
         </button>
       </div>
 
-      {response?.error && (
+      <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-white/55">
+        <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
+          {loading ? 'Loading first page' : 'Loaded'}
+        </span>
+        <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
+          {loadedCount} model{loadedCount === 1 ? '' : 's'}
+        </span>
+        <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 truncate max-w-[100%]">
+          {status}
+        </span>
+      </div>
+
+      {error && (
         <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-          {response.error}
+          {error}
         </div>
       )}
 
-      {response?.machineSpecs && (
-        <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-          <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-2.5">
-            <p className="text-white/50">CPU Cores</p>
-            <p className="text-white/85 font-medium mt-0.5">{response.machineSpecs.cpuCores}</p>
+      <div ref={scrollContainerRef} className="mt-4 space-y-3 max-h-[68vh] overflow-y-auto pr-1 custom-scrollbar">
+        {models.length === 0 && loading ? (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/45">
+            Waiting for the first GGUF model...
           </div>
-          <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-2.5">
-            <p className="text-white/50">RAM</p>
-            <p className="text-white/85 font-medium mt-0.5">{response.machineSpecs.totalMemoryGB} GB</p>
-          </div>
-          <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-2.5">
-            <p className="text-white/50">GPU</p>
-            <p className="text-white/85 font-medium mt-0.5">{response.machineSpecs.gpuName || 'Not detected'}</p>
-          </div>
-          <div className="rounded-2xl bg-white/[0.03] border border-white/10 p-2.5">
-            <p className="text-white/50">GPU VRAM</p>
-            <p className="text-white/85 font-medium mt-0.5">{response.machineSpecs.gpuMemoryGB ? `${response.machineSpecs.gpuMemoryGB} GB` : '-'}</p>
-          </div>
-        </div>
-      )}
+        ) : null}
 
-      {response?.recommendation && (
-        <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs uppercase tracking-wider text-white/55">Recommended</p>
-            <span className={`text-[11px] px-2 py-1 rounded-full ${fitBadgeColor(response.recommendation.fit)}`}>
-              {response.recommendation.fit}
-            </span>
-          </div>
-          <p className="mt-1 text-sm text-white/90 font-semibold">{response.recommendation.modelId}</p>
-          <p className="text-xs text-white/70 mt-0.5">{response.recommendation.fileName}</p>
-          <p className="text-xs text-white/60 mt-1">Size: {response.recommendation.sizeGB ?? '-'} GB</p>
-          <p className="text-xs text-white/50 mt-1">{response.recommendation.reason}</p>
-        </div>
-      )}
-
-      {models.length > 0 && (
-        <div className="mt-4 space-y-3 max-h-[56vh] overflow-y-auto pr-1 custom-scrollbar">
-          {models.map((model) => (
-            <div key={model.id} className="rounded-2xl border border-white/10 bg-white/[0.02] p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white/90 truncate">{model.id}</p>
-                  <p className="text-[11px] text-white/55 mt-0.5">
-                    by {model.author || 'unknown'} • downloads {model.downloads || 0} • likes {model.likes || 0}
-                  </p>
-                </div>
+        {models.map((model) => (
+          <button
+            key={model.id}
+            type="button"
+            onClick={() => handleOpenModel(model)}
+            className="block w-full rounded-2xl border border-white/10 bg-white/[0.02] p-3 text-left transition-colors hover:bg-white/[0.04]"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white/90 truncate">{getDisplayName(model.id)}</p>
+                <p className="text-[11px] text-white/40 mt-0.5 truncate">{model.id}</p>
+                <p className="text-[11px] text-white/55 mt-0.5">
+                  by {model.author || 'unknown'} • downloads {model.downloads || 0} • likes {model.likes || 0}
+                </p>
               </div>
-
-              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {model.ggufFiles.map((file) => (
-                  <div key={`${model.id}-${file.name}`} className="rounded-xl border border-white/10 bg-[#0f0f0f] px-2.5 py-2">
-                    <p className="text-xs text-white/85 break-all">{file.name}</p>
-                    <p className="text-[11px] text-white/55 mt-1">{file.sizeGB ? `${file.sizeGB} GB` : 'size unknown'}</p>
-                  </div>
-                ))}
-              </div>
+              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] uppercase tracking-wider text-white/50">
+                GGUF
+              </span>
             </div>
-          ))}
-        </div>
-      )}
+
+            <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-white/60">
+              {model.pipelineTag && (
+                <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1">
+                  {model.pipelineTag}
+                </span>
+              )}
+              {model.lastModified && (
+                <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1">
+                  Updated {new Date(model.lastModified).toLocaleDateString()}
+                </span>
+              )}
+              {model.tags?.slice(0, 4).map((tag) => (
+                <span key={`${model.id}-${tag}`} className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          </button>
+        ))}
+
+        <div ref={sentinelRef} className="h-1 w-full" />
+
+        {isFetchingMore && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/45">
+            Loading 200 more models...
+          </div>
+        )}
+
+        {!hasMore && models.length > 0 && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/45">
+            You&apos;ve reached the end of the GGUF catalog.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

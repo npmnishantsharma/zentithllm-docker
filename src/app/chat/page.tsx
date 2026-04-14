@@ -34,6 +34,14 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { graphqlRequest } from '@/lib/graphql-client';
+import { clearUserSession } from '@/app/login/actions';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 type Message = {
   id: string;
@@ -48,6 +56,13 @@ type ConversationItem = {
   id: string;
   name: string;
   date: string;
+};
+
+type ModelOption = {
+  id: string;
+  name: string;
+  provider?: string;
+  description?: string;
 };
 
 const INITIAL_CONVERSATIONS = [
@@ -78,6 +93,8 @@ export default function ChatPage() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [msgCopiedId, setMsgCopiedId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -125,6 +142,46 @@ export default function ChatPage() {
       }
     }
   }, [isMobile]);
+
+  useEffect(() => {
+    async function fetchModels() {
+      try {
+        const response = await fetch('/api/models', { cache: 'no-store' });
+        const data = await response.json();
+
+        if (!response.ok || !data?.success || !Array.isArray(data.models)) {
+          return;
+        }
+
+        const availableModels: ModelOption[] = data.models
+          .filter((model: any) => model?.id && model?.name)
+          .map((model: any) => ({
+            id: String(model.id),
+            name: String(model.name),
+            provider: model.provider ? String(model.provider) : undefined,
+            description: model.description ? String(model.description) : undefined,
+          }));
+
+        setModels(availableModels);
+
+        const savedModelId = localStorage.getItem('nexus_selected_model_id');
+        if (savedModelId && availableModels.some((model) => model.id === savedModelId)) {
+          setSelectedModelId(savedModelId);
+          return;
+        }
+
+        if (availableModels.length > 0) {
+          const defaultModelId = availableModels[0].id;
+          setSelectedModelId(defaultModelId);
+          localStorage.setItem('nexus_selected_model_id', defaultModelId);
+        }
+      } catch (error) {
+        console.error('[Chat] Failed to fetch models:', error);
+      }
+    }
+
+    fetchModels();
+  }, []);
 
   const toggleSidebar = (open: boolean) => {
     setSidebarOpen(open);
@@ -190,7 +247,12 @@ export default function ChatPage() {
           console.log('[Chat] User profile loaded from session:', profileData);
           return;
         } else {
-          console.log('[Chat] Failed to fetch profile. Redirecting to login.');
+          console.log('[Chat] Failed to fetch profile. Clearing session and redirecting to login.');
+          try {
+            await clearUserSession();
+          } catch (clearError) {
+            console.error('[Chat] Failed to clear session after invalid profile check:', clearError);
+          }
           router.replace('/login');
           return;
         }
@@ -276,6 +338,7 @@ export default function ChatPage() {
   const userDisplayName = userData?.displayName || "Developer";
   const userPhoto = userData?.photoURL || "";
   const userTag = userData?.userTag || { name: "User", color: "gray" };
+  const selectedModel = models.find((model) => model.id === selectedModelId);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground font-body dark">
@@ -369,16 +432,38 @@ export default function ChatPage() {
       )}>
         
         <header className="h-14 flex items-center px-4 border-b border-white/5 bg-[#0d0d0d]/80 backdrop-blur-md sticky top-0 z-30">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 w-full min-w-0">
             {!sidebarOpen && (
               <Button variant="ghost" size="icon" className="text-white/50 hover:text-white" onClick={() => toggleSidebar(true)}>
                 <Menu size={20} />
               </Button>
             )}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3 min-w-0 w-full">
               <span className="text-sm font-semibold text-white/90 truncate max-w-[150px] sm:max-w-none">
                 {conversations.find(c => c.id === activeConvId)?.name || "New Chat"}
               </span>
+              <div className="w-[170px] sm:w-[240px] shrink-0 ml-auto">
+                <Select
+                  value={selectedModelId}
+                  onValueChange={(value) => {
+                    setSelectedModelId(value);
+                    localStorage.setItem('nexus_selected_model_id', value);
+                  }}
+                >
+                  <SelectTrigger className="h-8 bg-white/5 border-white/10 text-xs sm:text-sm text-white focus:ring-0 focus:ring-offset-0">
+                    <SelectValue placeholder="Choose model">
+                      {selectedModel ? selectedModel.name : 'Choose model'}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.map((model) => (
+                      <SelectItem key={model.id} value={model.id}>
+                        {model.provider ? `${model.name} (${model.provider})` : model.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
         </header>

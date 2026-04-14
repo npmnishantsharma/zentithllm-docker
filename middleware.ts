@@ -51,6 +51,29 @@ export async function middleware(request: NextRequest) {
 
   // Routes that don't require authentication
   const publicRoutes = ['/login', '/api/auth/proxy-stream', '/api/graphql'];
+
+  // If user already has a valid session, keep them out of login pages.
+  if (pathname.startsWith('/login')) {
+    const sessionId = request.cookies.get('sessionId')?.value;
+
+    if (sessionId) {
+      try {
+        const sessionData = await SessionService.getSession(sessionId);
+
+        if (sessionData) {
+          return withApiSecurityHeaders(NextResponse.redirect(new URL('/chat', request.url)));
+        }
+
+        // Invalid session cookie: clear it and continue to login.
+        const response = NextResponse.next();
+        response.cookies.delete('sessionId');
+        return withApiSecurityHeaders(response);
+      } catch (error) {
+        console.error('Session validation error:', error);
+        // If session store is unavailable, allow login route access.
+      }
+    }
+  }
   
   // Check if route is public
   if (publicRoutes.some(route => pathname.startsWith(route))) {
