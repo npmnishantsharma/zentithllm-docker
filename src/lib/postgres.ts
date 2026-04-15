@@ -14,16 +14,24 @@ declare global {
   var _pgPool: Pool | undefined;
 }
 
-const pool = global._pgPool || new Pool({
-  host: process.env.POSTGRES_HOST || 'localhost',
-  port: parseInt(process.env.POSTGRES_PORT || '5432'),
-  database: process.env.POSTGRES_DB || 'zentith',
-  user: process.env.POSTGRES_USER || 'zentith_user',
-  password: process.env.POSTGRES_PASSWORD || 'zentith_password',
-  max: 20, // Maximum number of clients in the pool
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+const poolConfig = process.env.USE_ONLINE_DB && process.env.POSTGRES_URL
+  ? {
+      connectionString: process.env.POSTGRES_URL,
+      max: 20, // Maximum number of clients in the pool
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    }
+  : {
+      host: process.env.POSTGRES_HOST || 'localhost',
+      port: parseInt(process.env.POSTGRES_PORT || '5432'),
+      database: process.env.POSTGRES_DB || 'zentith',
+      user: process.env.POSTGRES_USER || 'zentith_user',
+      password: process.env.POSTGRES_PASSWORD || 'zentith_password',
+      max: 20, // Maximum number of clients in the pool
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+  }
+  const pool = global._pgPool || new Pool(poolConfig);
 
 if (process.env.NODE_ENV !== 'production') {
   global._pgPool = pool;
