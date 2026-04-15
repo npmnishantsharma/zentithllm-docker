@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLlama, LlamaChatSession, type LlamaContext, type LlamaModel } from 'node-llama-cpp';
+import { stat } from 'fs/promises';
 import path from 'path';
+import { getSessionUser } from '@/lib/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,6 +20,11 @@ let llamaModel: LlamaModel | null = null;
 let loadedModelPath: string | null = null;
 let initPromise: Promise<void> | null = null;
 
+type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
+
 function resolveModelPath(modelPath?: string): string | null {
   const candidate = modelPath || process.env.LLAMA_MODEL_PATH || null;
   if (!candidate) return null;
@@ -27,6 +34,37 @@ function resolveModelPath(modelPath?: string): string | null {
   }
 
   return path.join(process.cwd(), candidate);
+}
+
+function isSafeModelPath(resolvedPath: string): boolean {
+  const modelsDir = path.join(process.cwd(), 'models');
+  const normalizedModelsDir = path.resolve(modelsDir);
+  const normalizedTarget = path.resolve(resolvedPath);
+
+  return normalizedTarget.startsWith(normalizedModelsDir + path.sep) && normalizedTarget.toLowerCase().endsWith('.gguf');
+}
+
+async function modelFileExists(resolvedPath: string): Promise<boolean> {
+  try {
+    const file = await stat(resolvedPath);
+    return file.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function buildPrompt(prompt: string, messages: ChatMessage[]): string {
+  if (!messages.length) return prompt;
+
+  const serialized = messages
+    .filter((m) => m && typeof m.content === 'string' && !!m.content.trim())
+    .map((m) => {
+      const role = m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user';
+      return `${role}: ${m.content.trim()}`;
+    })
+    .join('\n');
+
+  return `${serialized}\nuser: ${prompt}`;
 }
 
 async function initModel(modelPath: string): Promise<void> {
@@ -83,6 +121,7 @@ function normalizeResponse(responseItems: any[]): Array<string | Record<string, 
 
 type StreamPayload = {
   prompt: string;
+  messages: ChatMessage[];
   requestId: string;
   modelPath: string | null;
   maxTokens: number;
@@ -95,6 +134,7 @@ type StreamPayload = {
 async function streamChat(req: NextRequest, payload: StreamPayload) {
   const {
     prompt,
+    messages,
     requestId,
     modelPath,
     maxTokens,
@@ -112,6 +152,21 @@ async function streamChat(req: NextRequest, payload: StreamPayload) {
     return NextResponse.json(
       { error: 'Missing model path. Provide modelPath in body or LLAMA_MODEL_PATH env var.' },
       { status: 400 }
+    );
+  }
+
+  if (!isSafeModelPath(modelPath)) {
+    return NextResponse.json(
+      { error: 'modelPath must point to a .gguf file inside models/' },
+      { status: 400 }
+    );
+  }
+
+  const exists = await modelFileExists(modelPath);
+  if (!exists) {
+    return NextResponse.json(
+      { error: 'Model file not found' },
+      { status: 404 }
     );
   }
 
@@ -156,7 +211,7 @@ async function streamChat(req: NextRequest, payload: StreamPayload) {
           contextSequence: requestContext.getSequence(),
         });
 
-        const answer = await chatSession.promptWithMeta(prompt, {
+        const answer = await chatSession.promptWithMeta(buildPrompt(prompt, messages), {
           maxTokens,
           temperature,
           topP,
@@ -214,10 +269,25 @@ async function streamChat(req: NextRequest, payload: StreamPayload) {
 }
 
 export async function POST(req: NextRequest) {
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const body = await req.json().catch(() => null);
+
+  const parsedMessages = Array.isArray(body?.messages)
+    ? body.messages
+        .map((m: any) => ({
+          role: m?.role,
+          content: typeof m?.content === 'string' ? m.content : '',
+        }))
+        .filter((m: any) => ['system', 'user', 'assistant'].includes(m.role) && m.content.trim().length > 0)
+    : [];
 
   return streamChat(req, {
     prompt: typeof body?.prompt === 'string' ? body.prompt.trim() : '',
+    messages: parsedMessages,
     requestId: typeof body?.requestId === 'string' && body.requestId.trim().length > 0
       ? body.requestId.trim()
       : globalThis.crypto.randomUUID(),
@@ -231,10 +301,16 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(req.url);
 
   return streamChat(req, {
     prompt: (searchParams.get('prompt') || '').trim(),
+    messages: [],
     requestId: (searchParams.get('requestId') || globalThis.crypto.randomUUID()).trim(),
     modelPath: resolveModelPath(searchParams.get('modelPath') || undefined),
     maxTokens: Number(searchParams.get('maxTokens')) || 512,

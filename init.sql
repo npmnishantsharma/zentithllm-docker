@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS user_security (
     mfa_enabled BOOLEAN DEFAULT FALSE,
     mfa_secret TEXT,
     mfa_backup_codes JSONB DEFAULT '[]'::jsonb,
-    passkeys JSONB DEFAULT '[]'::jsonb
+    passkeys JSONB DEFAULT '[]'::jsonb,
+    password_hash TEXT
 );
 
 -- Generic Postgres key-value store for sessions, caches, and temporary auth data

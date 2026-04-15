@@ -90,6 +90,9 @@ export interface UserSecurity {
 }
 
 export class UserSecurityService {
+  private static passwordHashColumnKnown = false;
+  private static passwordHashColumnAvailable = false;
+
   private static async ensureTable(): Promise<void> {
     await query(`
       CREATE TABLE IF NOT EXISTS user_security (
@@ -101,9 +104,28 @@ export class UserSecurityService {
         password_hash TEXT
       )
     `);
+  }
 
-    // Keep compatibility with existing deployments that created user_security before password_hash existed.
-    await query(`ALTER TABLE user_security ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+  private static async ensurePasswordHashColumnInfo(): Promise<void> {
+    if (this.passwordHashColumnKnown) return;
+
+    try {
+      const result = await query(
+        `SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'user_security'
+           AND column_name = 'password_hash'
+         LIMIT 1`
+      );
+
+      this.passwordHashColumnAvailable = result.rows.length > 0;
+      this.passwordHashColumnKnown = true;
+    } catch {
+      // Fail closed for optional password-hash support if metadata lookup fails.
+      this.passwordHashColumnAvailable = false;
+      this.passwordHashColumnKnown = true;
+    }
   }
 
   static async getSecurity(userId: string): Promise<UserSecurity | null> {
@@ -113,7 +135,7 @@ export class UserSecurityService {
 
     await this.ensureTable();
     const result = await query(
-      `SELECT user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys, password_hash FROM user_security WHERE user_id = $1`,
+      `SELECT user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys FROM user_security WHERE user_id = $1`,
       [userId]
     );
     if (result.rows.length === 0) {
@@ -126,7 +148,6 @@ export class UserSecurityService {
       mfaSecret: row.mfa_secret,
       mfaBackupCodes: row.mfa_backup_codes ? (typeof row.mfa_backup_codes === 'string' ? JSON.parse(row.mfa_backup_codes) : row.mfa_backup_codes) : [],
       passkeys: row.passkeys ? (typeof row.passkeys === 'string' ? JSON.parse(row.passkeys) : row.passkeys) : [],
-      passwordHash: row.password_hash || undefined,
     };
 
     await setKey(cacheKey, security, 5 * 60 * 1000); // 5 mins cache
@@ -186,6 +207,9 @@ export class UserSecurityService {
 
   static async getPasswordHash(userId: string): Promise<string | null> {
     await this.ensureTable();
+    await this.ensurePasswordHashColumnInfo();
+    if (!this.passwordHashColumnAvailable) return null;
+
     const result = await query(
       `SELECT password_hash FROM user_security WHERE user_id = $1`,
       [userId]
@@ -197,6 +221,11 @@ export class UserSecurityService {
 
   static async setPasswordHash(userId: string, passwordHash: string): Promise<void> {
     await this.ensureTable();
+    await this.ensurePasswordHashColumnInfo();
+    if (!this.passwordHashColumnAvailable) {
+      throw new Error('Password login is not available: user_security.password_hash column is missing');
+    }
+
     await query(
       `INSERT INTO user_security (user_id, password_hash)
        VALUES ($1, $2)
