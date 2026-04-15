@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Sparkles, LayoutDashboard, Loader2, CheckCircle2, KeyRound } from 'lucide-react';
-import { authenticateWithNexusLLM, getUserInfoWithCode } from './actions';
+import { authenticateWithNexusLLM, getUserInfoWithCode, loginWithEmailPassword } from './actions';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
 import { graphqlRequest } from '@/lib/graphql-client';
@@ -16,6 +17,8 @@ export default function LoginPage() {
   const [isSuccess, setIsSuccess] = useState(false);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
   const [isPasskeyReady, setIsPasskeyReady] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
   // Check if user is already logged in
   useEffect(() => {
@@ -319,6 +322,49 @@ export default function LoginPage() {
     }
   };
 
+  const handleEmailPasswordLogin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setIsSuccess(false);
+    setAuthStatus('Verifying credentials...');
+
+    try {
+      const result = await loginWithEmailPassword(email, password);
+
+      if (!result.success) {
+        throw new Error(result.error || 'Invalid credentials');
+      }
+
+      if (result.requireVerification && result.tempSessionId) {
+        toast({
+          title: '2FA / Passkey Required',
+          description: 'Your account needs additional verification. Redirecting...',
+        });
+        router.push(`/login/verify?token=${result.tempSessionId}`);
+        return;
+      }
+
+      setIsSuccess(true);
+      setAuthStatus('Credentials verified. Redirecting...');
+      toast({
+        title: 'Login Successful',
+        description: 'Signed in with email and password.',
+      });
+
+      setTimeout(() => {
+        router.push('/chat');
+      }, 900);
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Email/Password Login Failed',
+        description: error?.message || 'Could not login with email and password.',
+      });
+      setIsLoading(false);
+      setAuthStatus(null);
+    }
+  };
+
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-background p-4 sm:p-6 font-body dark text-foreground">
       <div className="w-full max-w-[400px] animate-fade-in flex flex-col items-center">
@@ -336,6 +382,39 @@ export default function LoginPage() {
           </CardHeader>
           <CardContent className="py-6 sm:py-8 px-4 sm:px-6">
             <div className="space-y-4">
+              <form onSubmit={handleEmailPasswordLogin} className="space-y-3">
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Email"
+                  autoComplete="email"
+                  disabled={isLoading}
+                  className="h-11 rounded-xl border-muted-foreground/30"
+                />
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                  disabled={isLoading}
+                  className="h-11 rounded-xl border-muted-foreground/30"
+                />
+                <Button
+                  type="submit"
+                  disabled={isLoading || !email.trim() || !password}
+                  className="w-full rounded-2xl h-12 transition-all font-bold"
+                >
+                  {isLoading && !isSuccess ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : null}
+                  Sign in with Email & Password
+                </Button>
+              </form>
+
+              <div className="text-center text-xs text-muted-foreground/80">or</div>
+
               <Button 
                 onClick={handleLogin}
                 disabled={isLoading}

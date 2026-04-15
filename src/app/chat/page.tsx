@@ -19,7 +19,8 @@ import {
   X,
   Copy,
   Check,
-  RotateCcw
+  RotateCcw,
+  ChevronDown
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -65,26 +66,11 @@ type ModelOption = {
   description?: string;
 };
 
-const INITIAL_CONVERSATIONS = [
-  { id: '1', name: 'Wikipedia to Markdown', date: 'Today' },
-  { id: '2', name: 'Android CI with Discord', date: 'Today' },
-  { id: '3', name: 'Docker Project Ideas', date: 'Yesterday' },
-  { id: '4', name: 'Derivative Function Rules', date: 'Yesterday' },
-  { id: '5', name: 'AI Instagram Support', date: 'Previous 7 Days' },
-];
-
-const MOCK_MESSAGES: Record<string, Message[]> = {
-  '2': [
-    { id: 'm1', role: 'assistant', senderName: 'Nexus AI', content: "Hello! I've analyzed your current CI/CD pipeline. How can I help you optimize the Discord webhook triggers today? Here's an example of a webhook structure:\n\n```json\n{\n  \"content\": \"Build Success!\",\n  \"embeds\": [{\n    \"title\": \"Android App\",\n    \"description\": \"Build #45 passed gracefully.\",\n    \"color\": 3066993\n  }]\n}\n```\n\nAlso, here is some math notation support: $E = mc^2$ and $$\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}$$", timestamp: '10:24 AM', avatar: 'https://picsum.photos/seed/ai/100/100' },
-    { id: 'm2', role: 'user', senderName: 'You', content: "Let's review the triggers. We need more granular build data in the notifications. Can you also explain the equation $P(A|B) = \\frac{P(B|A)P(A)}{P(B)}$?", timestamp: '10:25 AM' },
-  ],
-};
-
 export default function ChatPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
-  const [conversations, setConversations] = useState<ConversationItem[]>(INITIAL_CONVERSATIONS);
-  const [activeConvId, setActiveConvId] = useState<string>('2');
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string>('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -95,6 +81,7 @@ export default function ChatPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
+  const [modelsError, setModelsError] = useState<string>('');
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -146,10 +133,12 @@ export default function ChatPage() {
   useEffect(() => {
     async function fetchModels() {
       try {
+        setModelsError('');
         const response = await fetch('/api/models', { cache: 'no-store' });
         const data = await response.json();
 
         if (!response.ok || !data?.success || !Array.isArray(data.models)) {
+          setModelsError('Could not load models');
           return;
         }
 
@@ -174,9 +163,12 @@ export default function ChatPage() {
           const defaultModelId = availableModels[0].id;
           setSelectedModelId(defaultModelId);
           localStorage.setItem('nexus_selected_model_id', defaultModelId);
+        } else {
+          setModelsError('No models available');
         }
       } catch (error) {
         console.error('[Chat] Failed to fetch models:', error);
+        setModelsError('Could not load models');
       }
     }
 
@@ -263,7 +255,6 @@ export default function ChatPage() {
     }
 
     fetchUserProfile();
-    setMessages(MOCK_MESSAGES[activeConvId] || []);
   }, [activeConvId, router]);
 
   useEffect(() => {
@@ -283,6 +274,10 @@ export default function ChatPage() {
     const content = customContent || inputValue;
     if (!content.trim()) return;
 
+    const isLocalModel = selectedModelId.startsWith('local:');
+    const localModelName = isLocalModel ? selectedModelId.replace(/^local:/, '') : '';
+    const modelPath = isLocalModel ? `models/${localModelName}` : null;
+
     if (!customContent) {
       const newMessage: Message = {
         id: Date.now().toString(),
@@ -295,21 +290,160 @@ export default function ChatPage() {
       setInputValue('');
     }
 
+    if (!selectedModelId) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          senderName: 'Nexus AI',
+          content: 'Please choose a model first.',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+      return;
+    }
+
+    if (!isLocalModel) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          senderName: 'Nexus AI',
+          content: 'This model is remote-only in the current setup. Choose a local GGUF model to run with node-llama-cpp.',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+      return;
+    }
+
     setIsTyping(true);
 
-    // Mock API delay
-    setTimeout(() => {
+    const assistantId = (Date.now() + 1).toString();
+    let assistantText = '';
+    let assistantCreated = false;
+
+    const appendAssistantChunk = (chunk: string) => {
+      if (!chunk) return;
+      assistantText += chunk;
+
+      if (!assistantCreated) {
+        assistantCreated = true;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            role: 'assistant',
+            senderName: 'Nexus AI',
+            content: assistantText,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            avatar: 'https://picsum.photos/seed/ai/100/100',
+          },
+        ]);
+        return;
+      }
+
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                content: assistantText,
+              }
+            : message
+        )
+      );
+    };
+
+    try {
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: content,
+          modelPath,
+          maxTokens: 512,
+          temperature: 0.7,
+          topP: 0.9,
+          contextSize: 4096,
+          batchSize: 512,
+        }),
+      });
+
+      if (!response.ok || !response.body) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(errorBody?.error || 'Failed to start local model stream');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+
+        for (const eventChunk of events) {
+          const lines = eventChunk.split('\n');
+          const eventType = lines.find((line) => line.startsWith('event:'))?.replace('event:', '').trim();
+          const dataLine = lines.find((line) => line.startsWith('data:'))?.replace('data:', '').trim();
+          if (!dataLine) continue;
+
+          let payload: any;
+          try {
+            payload = JSON.parse(dataLine);
+          } catch {
+            continue;
+          }
+
+          if (eventType === 'chunk') {
+            appendAssistantChunk(String(payload?.chunk?.text || ''));
+          }
+
+          if (eventType === 'done' && !assistantCreated) {
+            const responseItems = Array.isArray(payload?.response) ? payload.response : [];
+            const fallbackText = responseItems
+              .map((item: any) => {
+                if (typeof item === 'string') return item;
+                if (item && typeof item === 'object' && 'text' in item) return String(item.text || '');
+                return '';
+              })
+              .join('');
+            appendAssistantChunk(fallbackText || 'Done.');
+          }
+
+          if (eventType === 'error') {
+            throw new Error(String(payload?.error || 'Local model stream failed'));
+          }
+        }
+      }
+    } catch (error: any) {
+      const message = String(error?.message || 'Failed to generate response');
+      if (!assistantCreated) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantId,
+            role: 'assistant',
+            senderName: 'Nexus AI',
+            content: `Error: ${message}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            avatar: 'https://picsum.photos/seed/ai/100/100',
+          },
+        ]);
+      } else {
+        appendAssistantChunk(`\n\nError: ${message}`);
+      }
+    } finally {
       setIsTyping(false);
-      const reply: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        senderName: 'Nexus AI',
-        content: "I've processed that request. The webhook payload has been updated to include granular telemetry for build status, duration, and error logs.\n\n### Updated Configuration\n\n```yaml\nwebhook:\n  url: \"${DISCORD_WEBHOOK_URL}\"\n  triggers:\n    - build_status\n    - duration_metrics\n    - error_logs\n```\n\nRegarding the equation, that's **Bayes' Theorem**, which describes the probability of an event based on prior knowledge of conditions that might be related to the event.",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        avatar: 'https://picsum.photos/seed/ai/100/100'
-      };
-      setMessages(prev => [...prev, reply]);
-    }, 1500);
+    }
   };
 
   const handleRegenerate = () => {
@@ -450,17 +584,19 @@ export default function ChatPage() {
                     localStorage.setItem('nexus_selected_model_id', value);
                   }}
                 >
-                  <SelectTrigger className="h-8 bg-white/5 border-white/10 text-xs sm:text-sm text-white focus:ring-0 focus:ring-offset-0">
-                    <SelectValue placeholder="Choose model">
-                      {selectedModel ? selectedModel.name : 'Choose model'}
-                    </SelectValue>
+                  <SelectTrigger className="h-9 w-full rounded-full border border-white/10 bg-[#1f1f1f] px-3 text-xs sm:text-sm text-white shadow-none transition-colors hover:bg-white/5 focus:ring-0 focus:ring-offset-0 data-[state=open]:bg-white/5">
+                    <SelectValue placeholder="Choose model" />
+                    
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent align="end" className="min-w-[220px] rounded-2xl border border-white/10 bg-[#111111] text-white shadow-2xl">
                     {models.map((model) => (
                       <SelectItem key={model.id} value={model.id}>
                         {model.provider ? `${model.name} (${model.provider})` : model.name}
                       </SelectItem>
                     ))}
+                    {models.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-white/60">{modelsError || 'Loading models...'}</div>
+                    ) : null}
                   </SelectContent>
                 </Select>
               </div>

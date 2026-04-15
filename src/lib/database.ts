@@ -36,6 +36,31 @@ export interface AppSettings {
   updatedBy?: string;
 }
 
+export interface ModelAccessSettings {
+  accessMode: 'open' | 'allowlist';
+  allowedEmails: string[];
+  blockedEmails: string[];
+  defaultRateLimit: number;
+  defaultRateWindowMinutes: number;
+  adminsBypassAccess: boolean;
+  adminsBypassRateLimit: boolean;
+  allowManualUpload: boolean;
+  allowDirectHuggingFaceUrl: boolean;
+  maxUploadSizeMb: number;
+  updatedAt: Date;
+  updatedBy?: string;
+}
+
+export interface ModelAccessOverride {
+  userId: string;
+  canAccessModels?: boolean;
+  rateLimit?: number;
+  rateWindowMinutes?: number;
+  notes?: string;
+  updatedAt: Date;
+  updatedBy?: string;
+}
+
 export interface Conversation {
   id: string;
   userId: string;
@@ -61,6 +86,7 @@ export interface UserSecurity {
   mfaSecret?: string;
   mfaBackupCodes?: any[];
   passkeys: any[];
+  passwordHash?: string;
 }
 
 export class UserSecurityService {
@@ -71,9 +97,13 @@ export class UserSecurityService {
         mfa_enabled BOOLEAN DEFAULT FALSE,
         mfa_secret TEXT,
         mfa_backup_codes JSONB DEFAULT '[]'::jsonb,
-        passkeys JSONB DEFAULT '[]'::jsonb
+        passkeys JSONB DEFAULT '[]'::jsonb,
+        password_hash TEXT
       )
     `);
+
+    // Keep compatibility with existing deployments that created user_security before password_hash existed.
+    await query(`ALTER TABLE user_security ADD COLUMN IF NOT EXISTS password_hash TEXT`);
   }
 
   static async getSecurity(userId: string): Promise<UserSecurity | null> {
@@ -83,7 +113,7 @@ export class UserSecurityService {
 
     await this.ensureTable();
     const result = await query(
-      `SELECT user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys FROM user_security WHERE user_id = $1`,
+      `SELECT user_id, mfa_enabled, mfa_secret, mfa_backup_codes, passkeys, password_hash FROM user_security WHERE user_id = $1`,
       [userId]
     );
     if (result.rows.length === 0) {
@@ -96,6 +126,7 @@ export class UserSecurityService {
       mfaSecret: row.mfa_secret,
       mfaBackupCodes: row.mfa_backup_codes ? (typeof row.mfa_backup_codes === 'string' ? JSON.parse(row.mfa_backup_codes) : row.mfa_backup_codes) : [],
       passkeys: row.passkeys ? (typeof row.passkeys === 'string' ? JSON.parse(row.passkeys) : row.passkeys) : [],
+      passwordHash: row.password_hash || undefined,
     };
 
     await setKey(cacheKey, security, 5 * 60 * 1000); // 5 mins cache
@@ -150,6 +181,30 @@ export class UserSecurityService {
     );
 
     // Invalidate cache
+    await deleteKey(`cache:security:${userId}`);
+  }
+
+  static async getPasswordHash(userId: string): Promise<string | null> {
+    await this.ensureTable();
+    const result = await query(
+      `SELECT password_hash FROM user_security WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) return null;
+    return result.rows[0].password_hash || null;
+  }
+
+  static async setPasswordHash(userId: string, passwordHash: string): Promise<void> {
+    await this.ensureTable();
+    await query(
+      `INSERT INTO user_security (user_id, password_hash)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id)
+       DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+      [userId, passwordHash]
+    );
+
     await deleteKey(`cache:security:${userId}`);
   }
 }
@@ -511,6 +566,439 @@ export class AppSettingsService {
 
     const countResult = await query(`SELECT COUNT(*)::int AS count FROM users`);
     return Number(countResult.rows[0]?.count || 0) === 0;
+  }
+}
+
+export class ModelAccessService {
+  private static readonly initLockKey = 9431127;
+  private static tablesReady = false;
+  private static initPromise: Promise<void> | null = null;
+
+  private static async ensureTables(): Promise<void> {
+    if (this.tablesReady) return;
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    this.initPromise = (async () => {
+      const client = await getClient();
+      try {
+        // Serialize schema initialization across concurrent requests/processes.
+        await client.query('SELECT pg_advisory_lock($1)', [this.initLockKey]);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS model_access_settings (
+            id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id = TRUE),
+            access_mode TEXT NOT NULL DEFAULT 'open' CHECK (access_mode IN ('open', 'allowlist')),
+            allowed_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
+            blocked_emails JSONB NOT NULL DEFAULT '[]'::jsonb,
+            default_rate_limit INTEGER NOT NULL DEFAULT 0,
+            default_rate_window_minutes INTEGER NOT NULL DEFAULT 60,
+            admins_bypass_access BOOLEAN NOT NULL DEFAULT TRUE,
+            admins_bypass_rate_limit BOOLEAN NOT NULL DEFAULT TRUE,
+            allow_manual_upload BOOLEAN NOT NULL DEFAULT TRUE,
+            allow_direct_hf_url BOOLEAN NOT NULL DEFAULT TRUE,
+            max_upload_size_mb INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+          )
+        `);
+
+        await client.query(`ALTER TABLE model_access_settings ADD COLUMN IF NOT EXISTS admins_bypass_access BOOLEAN NOT NULL DEFAULT TRUE`);
+        await client.query(`ALTER TABLE model_access_settings ADD COLUMN IF NOT EXISTS admins_bypass_rate_limit BOOLEAN NOT NULL DEFAULT TRUE`);
+        await client.query(`ALTER TABLE model_access_settings ADD COLUMN IF NOT EXISTS allow_manual_upload BOOLEAN NOT NULL DEFAULT TRUE`);
+        await client.query(`ALTER TABLE model_access_settings ADD COLUMN IF NOT EXISTS allow_direct_hf_url BOOLEAN NOT NULL DEFAULT TRUE`);
+        await client.query(`ALTER TABLE model_access_settings ADD COLUMN IF NOT EXISTS max_upload_size_mb INTEGER NOT NULL DEFAULT 0`);
+
+        await client.query(`INSERT INTO model_access_settings (id) VALUES (TRUE) ON CONFLICT (id) DO NOTHING`);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS model_access_overrides (
+            user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            can_access_models BOOLEAN,
+            rate_limit INTEGER,
+            rate_window_minutes INTEGER,
+            notes TEXT,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+          )
+        `);
+
+        this.tablesReady = true;
+      } catch (error: any) {
+        // Postgres can still throw this during concurrent catalog updates in rare races.
+        // If tables now exist, treat initialization as complete.
+        if (error?.code === '23505' && error?.constraint === 'pg_type_typname_nsp_index') {
+          const exists = await client.query(
+            `SELECT
+               to_regclass('public.model_access_settings') IS NOT NULL AS settings_exists,
+               to_regclass('public.model_access_overrides') IS NOT NULL AS overrides_exists`
+          );
+          const row = exists.rows[0];
+          if (row?.settings_exists && row?.overrides_exists) {
+            this.tablesReady = true;
+            return;
+          }
+        }
+
+        throw error;
+      } finally {
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [this.initLockKey]);
+        } catch {
+          // Ignore unlock failures on connection teardown.
+        }
+        client.release();
+      }
+    })();
+
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private static normalizeEmails(emails: string[]): string[] {
+    return Array.from(
+      new Set(
+        emails
+          .map((email) => email.trim().toLowerCase())
+          .filter((email) => !!email)
+      )
+    );
+  }
+
+  private static parseEmailList(value: any): string[] {
+    if (!value) return [];
+    if (Array.isArray(value)) return this.normalizeEmails(value.map(String));
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? this.normalizeEmails(parsed.map(String)) : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  static async getSettings(): Promise<ModelAccessSettings> {
+    const cacheKey = 'cache:model_access_settings';
+    const cached = await getKey<ModelAccessSettings>(cacheKey);
+    if (cached) return { ...cached, updatedAt: new Date(cached.updatedAt) };
+
+    await this.ensureTables();
+
+    const result = await query(
+      `SELECT access_mode, allowed_emails, blocked_emails, default_rate_limit, default_rate_window_minutes,
+              admins_bypass_access, admins_bypass_rate_limit, allow_manual_upload, allow_direct_hf_url,
+              max_upload_size_mb, updated_at, updated_by
+       FROM model_access_settings
+       WHERE id = TRUE`
+    );
+
+    const row = result.rows[0];
+    const settings = {
+      accessMode: row?.access_mode === 'allowlist' ? 'allowlist' : 'open',
+      allowedEmails: this.parseEmailList(row?.allowed_emails),
+      blockedEmails: this.parseEmailList(row?.blocked_emails),
+      defaultRateLimit: Number(row?.default_rate_limit || 0),
+      defaultRateWindowMinutes: Number(row?.default_rate_window_minutes || 60),
+      adminsBypassAccess: row?.admins_bypass_access !== false,
+      adminsBypassRateLimit: row?.admins_bypass_rate_limit !== false,
+      allowManualUpload: row?.allow_manual_upload !== false,
+      allowDirectHuggingFaceUrl: row?.allow_direct_hf_url !== false,
+      maxUploadSizeMb: Math.max(0, Number(row?.max_upload_size_mb || 0)),
+      updatedAt: row?.updated_at ? new Date(row.updated_at) : new Date(),
+      updatedBy: row?.updated_by || undefined,
+    };
+
+    await setKey(cacheKey, settings, 60 * 60 * 1000);
+    return settings;
+  }
+
+  static async updateSettings(
+    updates: Partial<Pick<ModelAccessSettings,
+      'accessMode' |
+      'allowedEmails' |
+      'blockedEmails' |
+      'defaultRateLimit' |
+      'defaultRateWindowMinutes' |
+      'adminsBypassAccess' |
+      'adminsBypassRateLimit' |
+      'allowManualUpload' |
+      'allowDirectHuggingFaceUrl' |
+      'maxUploadSizeMb'
+    >>,
+    updatedBy?: string
+  ): Promise<void> {
+    await this.ensureTables();
+
+    const fields: string[] = ['updated_at = NOW()'];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (updates.accessMode !== undefined) {
+      fields.push(`access_mode = $${paramIndex++}`);
+      values.push(updates.accessMode);
+    }
+
+    if (updates.allowedEmails !== undefined) {
+      fields.push(`allowed_emails = $${paramIndex++}`);
+      values.push(JSON.stringify(this.normalizeEmails(updates.allowedEmails)));
+    }
+
+    if (updates.blockedEmails !== undefined) {
+      fields.push(`blocked_emails = $${paramIndex++}`);
+      values.push(JSON.stringify(this.normalizeEmails(updates.blockedEmails)));
+    }
+
+    if (updates.defaultRateLimit !== undefined) {
+      fields.push(`default_rate_limit = $${paramIndex++}`);
+      values.push(Math.max(0, Number(updates.defaultRateLimit) || 0));
+    }
+
+    if (updates.defaultRateWindowMinutes !== undefined) {
+      fields.push(`default_rate_window_minutes = $${paramIndex++}`);
+      values.push(Math.max(1, Number(updates.defaultRateWindowMinutes) || 60));
+    }
+
+    if (updates.adminsBypassAccess !== undefined) {
+      fields.push(`admins_bypass_access = $${paramIndex++}`);
+      values.push(Boolean(updates.adminsBypassAccess));
+    }
+
+    if (updates.adminsBypassRateLimit !== undefined) {
+      fields.push(`admins_bypass_rate_limit = $${paramIndex++}`);
+      values.push(Boolean(updates.adminsBypassRateLimit));
+    }
+
+    if (updates.allowManualUpload !== undefined) {
+      fields.push(`allow_manual_upload = $${paramIndex++}`);
+      values.push(Boolean(updates.allowManualUpload));
+    }
+
+    if (updates.allowDirectHuggingFaceUrl !== undefined) {
+      fields.push(`allow_direct_hf_url = $${paramIndex++}`);
+      values.push(Boolean(updates.allowDirectHuggingFaceUrl));
+    }
+
+    if (updates.maxUploadSizeMb !== undefined) {
+      fields.push(`max_upload_size_mb = $${paramIndex++}`);
+      values.push(Math.max(0, Number(updates.maxUploadSizeMb) || 0));
+    }
+
+    if (updatedBy) {
+      fields.push(`updated_by = $${paramIndex++}`);
+      values.push(updatedBy);
+    }
+
+    await query(
+      `UPDATE model_access_settings
+       SET ${fields.join(', ')}
+       WHERE id = TRUE`,
+      values
+    );
+
+    await deleteKey('cache:model_access_settings');
+  }
+
+  static async getUserOverride(userId: string): Promise<ModelAccessOverride | null> {
+    await this.ensureTables();
+
+    const result = await query(
+      `SELECT user_id, can_access_models, rate_limit, rate_window_minutes, notes, updated_at, updated_by
+       FROM model_access_overrides
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      userId: row.user_id,
+      canAccessModels: row.can_access_models,
+      rateLimit: row.rate_limit !== null ? Number(row.rate_limit) : undefined,
+      rateWindowMinutes: row.rate_window_minutes !== null ? Number(row.rate_window_minutes) : undefined,
+      notes: row.notes || undefined,
+      updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
+      updatedBy: row.updated_by || undefined,
+    };
+  }
+
+  static async upsertUserOverride(
+    userId: string,
+    updates: Partial<Pick<ModelAccessOverride, 'canAccessModels' | 'rateLimit' | 'rateWindowMinutes' | 'notes'>>,
+    updatedBy?: string
+  ): Promise<void> {
+    await this.ensureTables();
+
+    const existing = await this.getUserOverride(userId);
+    if (!existing) {
+      await query(
+        `INSERT INTO model_access_overrides (user_id, can_access_models, rate_limit, rate_window_minutes, notes, updated_at, updated_by)
+         VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
+        [
+          userId,
+          updates.canAccessModels ?? null,
+          updates.rateLimit ?? null,
+          updates.rateWindowMinutes ?? null,
+          updates.notes ?? null,
+          updatedBy || null,
+        ]
+      );
+      return;
+    }
+
+    const fields: string[] = ['updated_at = NOW()'];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (updates.canAccessModels !== undefined) {
+      fields.push(`can_access_models = $${paramIndex++}`);
+      values.push(updates.canAccessModels);
+    }
+
+    if (updates.rateLimit !== undefined) {
+      fields.push(`rate_limit = $${paramIndex++}`);
+      values.push(updates.rateLimit === null ? null : Math.max(0, Number(updates.rateLimit) || 0));
+    }
+
+    if (updates.rateWindowMinutes !== undefined) {
+      fields.push(`rate_window_minutes = $${paramIndex++}`);
+      values.push(updates.rateWindowMinutes === null ? null : Math.max(1, Number(updates.rateWindowMinutes) || 1));
+    }
+
+    if (updates.notes !== undefined) {
+      fields.push(`notes = $${paramIndex++}`);
+      values.push(updates.notes || null);
+    }
+
+    if (updatedBy) {
+      fields.push(`updated_by = $${paramIndex++}`);
+      values.push(updatedBy);
+    }
+
+    values.push(userId);
+    await query(
+      `UPDATE model_access_overrides
+       SET ${fields.join(', ')}
+       WHERE user_id = $${paramIndex}`,
+      values
+    );
+  }
+
+  static async deleteUserOverride(userId: string): Promise<void> {
+    await this.ensureTables();
+    await query(`DELETE FROM model_access_overrides WHERE user_id = $1`, [userId]);
+  }
+
+  static async listUserOverrides(): Promise<Array<ModelAccessOverride & { email?: string; displayName?: string; isAdmin?: boolean }>> {
+    await this.ensureTables();
+
+    const result = await query(
+      `SELECT
+         o.user_id,
+         o.can_access_models,
+         o.rate_limit,
+         o.rate_window_minutes,
+         o.notes,
+         o.updated_at,
+         o.updated_by,
+         u.email,
+         u.display_name,
+         u.is_admin
+       FROM model_access_overrides o
+       INNER JOIN users u ON u.id = o.user_id
+       ORDER BY COALESCE(u.display_name, u.email) ASC`
+    );
+
+    return result.rows.map((row) => ({
+      userId: row.user_id,
+      canAccessModels: row.can_access_models,
+      rateLimit: row.rate_limit !== null ? Number(row.rate_limit) : undefined,
+      rateWindowMinutes: row.rate_window_minutes !== null ? Number(row.rate_window_minutes) : undefined,
+      notes: row.notes || undefined,
+      updatedAt: row.updated_at ? new Date(row.updated_at) : new Date(),
+      updatedBy: row.updated_by || undefined,
+      email: row.email,
+      displayName: row.display_name,
+      isAdmin: row.is_admin,
+    }));
+  }
+
+  static async canUserAccessModels(user: { userId?: string; email?: string; isAdmin?: boolean }): Promise<boolean> {
+    const email = (user.email || '').trim().toLowerCase();
+    const settings = await this.getSettings();
+    const override = user.userId ? await this.getUserOverride(user.userId) : null;
+
+    if (user.isAdmin && settings.adminsBypassAccess) return true;
+
+    if (override?.canAccessModels === true) return true;
+    if (override?.canAccessModels === false) return false;
+
+    if (settings.blockedEmails.includes(email)) return false;
+
+    if (settings.accessMode === 'allowlist') {
+      return settings.allowedEmails.includes(email);
+    }
+
+    return true;
+  }
+
+  static async getEffectiveRateLimit(user: { userId?: string; email?: string; isAdmin?: boolean }): Promise<{ limit: number; windowMinutes: number }> {
+    const settings = await this.getSettings();
+
+    if (user.isAdmin && settings.adminsBypassRateLimit) {
+      return { limit: 0, windowMinutes: 60 };
+    }
+
+    const override = user.userId ? await this.getUserOverride(user.userId) : null;
+
+    return {
+      limit: override?.rateLimit !== undefined && override?.rateLimit !== null ? override.rateLimit : settings.defaultRateLimit,
+      windowMinutes:
+        override?.rateWindowMinutes !== undefined && override?.rateWindowMinutes !== null
+          ? override.rateWindowMinutes
+          : settings.defaultRateWindowMinutes,
+    };
+  }
+
+  static async consumeRateLimit(key: string, limit: number, windowMinutes: number): Promise<{ allowed: boolean; remaining: number }> {
+    if (!limit || limit <= 0) {
+      return { allowed: true, remaining: Infinity };
+    }
+
+    const windowMs = Math.max(1, windowMinutes) * 60 * 1000;
+    const counterKey = `model:rate:${key}`;
+    const current = await getKey<number>(counterKey);
+    const next = (current || 0) + 1;
+
+    if (next > limit) {
+      return { allowed: false, remaining: 0 };
+    }
+
+    await setKey(counterKey, next, windowMs);
+    return { allowed: true, remaining: limit - next };
+  }
+
+  static async canUseDirectHuggingFaceUrl(): Promise<boolean> {
+    const settings = await this.getSettings();
+    return settings.allowDirectHuggingFaceUrl;
+  }
+
+  static async canUseManualUpload(): Promise<boolean> {
+    const settings = await this.getSettings();
+    return settings.allowManualUpload;
+  }
+
+  static async getMaxUploadSizeBytes(): Promise<number> {
+    const settings = await this.getSettings();
+    if (!settings.maxUploadSizeMb || settings.maxUploadSizeMb <= 0) return 0;
+    return settings.maxUploadSizeMb * 1024 * 1024;
   }
 }
 

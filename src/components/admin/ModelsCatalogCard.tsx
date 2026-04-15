@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Search, X } from 'lucide-react';
 
 type ModelSummary = {
   id: string;
@@ -34,6 +35,8 @@ export function ModelsCatalogCard() {
   const [hasMore, setHasMore] = useState(true);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const isFetchingRef = useRef(false);
@@ -52,6 +55,9 @@ export function ModelsCatalogCard() {
 
     try {
       const params = new URLSearchParams({ limit: '200' });
+      if (searchQuery.trim()) {
+        params.set('q', searchQuery.trim());
+      }
       if (cursor) {
         params.set('cursor', cursor);
       }
@@ -103,7 +109,7 @@ export function ModelsCatalogCard() {
     setLoading(true);
     void loadPage(null, true);
     // Reload when the user clicks refresh.
-  }, [refreshToken]);
+  }, [refreshToken, searchQuery]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -125,6 +131,18 @@ export function ModelsCatalogCard() {
   }, [hasMore, models.length]);
 
   const refreshCatalog = () => {
+    setRefreshToken((current) => current + 1);
+  };
+
+  const handleSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSearchQuery(searchInput.trim());
+    setRefreshToken((current) => current + 1);
+  };
+
+  const clearSearch = () => {
+    setSearchInput('');
+    setSearchQuery('');
     setRefreshToken((current) => current + 1);
   };
 
@@ -157,6 +175,49 @@ export function ModelsCatalogCard() {
           {loading ? 'Loading...' : 'Reload Catalog'}
         </button>
       </div>
+
+      <form onSubmit={handleSearch} className="mt-4 flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/35" />
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search models by name or author"
+            className="h-10 w-full rounded-full border border-white/10 bg-[#1f1f1f] pl-9 pr-10 text-sm text-white placeholder:text-white/35 outline-none transition-colors focus:border-white/20 focus:bg-white/5"
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={clearSearch}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-white/45 hover:text-white"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <button
+          type="submit"
+          className="h-10 rounded-full border border-white/15 bg-white text-black px-4 text-sm font-medium hover:bg-white/90 transition-colors"
+        >
+          Search
+        </button>
+      </form>
+
+      {searchQuery && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-white/55">
+          <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
+            Filtering by: {searchQuery}
+          </span>
+          <button
+            type="button"
+            onClick={clearSearch}
+            className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-white/80 hover:bg-white/5 transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-white/55">
         <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">

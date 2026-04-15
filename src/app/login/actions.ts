@@ -3,14 +3,34 @@
 
 import { cookies } from 'next/headers';
 import { UserService, SessionService, UserSecurityService, AppSettingsService } from '@/lib/database';
-import { randomBytes } from 'crypto';
+import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'crypto';
+import { promisify } from 'util';
 import { setKey } from '@/lib/keyv';
+
+const scryptAsync = promisify(scryptCallback);
 
 /**
  * Generate a secure session ID
  */
 function generateSessionId(): string {
   return randomBytes(32).toString('hex');
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16).toString('hex');
+  const derived = (await scryptAsync(password, salt, 64)) as Buffer;
+  return `${salt}:${derived.toString('hex')}`;
+}
+
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const [salt, expectedHex] = storedHash.split(':');
+  if (!salt || !expectedHex) return false;
+
+  const derived = (await scryptAsync(password, salt, 64)) as Buffer;
+  const expected = Buffer.from(expectedHex, 'hex');
+
+  if (derived.length !== expected.length) return false;
+  return timingSafeEqual(derived, expected);
 }
 
 /**
@@ -320,5 +340,93 @@ export async function verifyTempLoginWithMfa(tempSessionId: string) {
   } catch (error: any) {
     console.error('MFA Verification Error:', error.message);
     return { success: false, error: error.message };
+  }
+}
+
+export async function loginWithEmailPassword(email: string, password: string) {
+  try {
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    const rawPassword = password || '';
+
+    if (!normalizedEmail || !rawPassword) {
+      return { success: false, error: 'Email and password are required' };
+    }
+
+    if (rawPassword.length < 8) {
+      return { success: false, error: 'Password must be at least 8 characters' };
+    }
+
+    const canAccess = await AppSettingsService.canAccessByEmail(normalizedEmail);
+    if (!canAccess) {
+      return {
+        success: false,
+        error: 'This app is private. Your email is not on the allow list.',
+      };
+    }
+
+    const user = await UserService.getUserByEmail(normalizedEmail);
+    if (!user) {
+      return { success: false, error: 'Invalid email or password' };
+    }
+
+    const storedHash = await UserSecurityService.getPasswordHash(user.id);
+    if (!storedHash) {
+      return {
+        success: false,
+        error: 'Password login is not enabled for this account yet.',
+      };
+    }
+
+    const valid = await verifyPassword(rawPassword, storedHash);
+    if (!valid) {
+      return { success: false, error: 'Invalid email or password' };
+    }
+
+    await UserService.updateUser(user.id, { lastLogin: new Date() });
+
+    const security = await UserSecurityService.getSecurity(user.id);
+
+    const sessionData = {
+      userId: user.id,
+      displayName: user.displayName,
+      email: user.email,
+      profilePicture: user.profilePicture,
+      loginTime: new Date().toISOString(),
+      isAdmin: user.isAdmin,
+      passkeys: security?.passkeys || [],
+      mfaEnabled: security?.mfaEnabled || false,
+      mfaSecret: security?.mfaSecret,
+      mfaBackupCodes: security?.mfaBackupCodes || [],
+    };
+
+    if (security?.mfaEnabled || (security?.passkeys && security.passkeys.length > 0)) {
+      const tempSessionId = generateSessionId();
+      await setKey(`temp_login:${tempSessionId}`, sessionData, 10 * 60 * 1000);
+
+      return {
+        success: true,
+        requireVerification: true,
+        tempSessionId,
+      };
+    }
+
+    const sessionResult = await createUserSession(sessionData);
+    if (!sessionResult.success) {
+      return { success: false, error: sessionResult.error || 'Failed to create session' };
+    }
+
+    return {
+      success: true,
+      data: {
+        user: {
+          email: user.email,
+          displayName: user.displayName,
+          isAdmin: user.isAdmin,
+        },
+      },
+    };
+  } catch (error: any) {
+    console.error('Email/password login error:', error?.message || error);
+    return { success: false, error: error?.message || 'Failed to login with email and password' };
   }
 }

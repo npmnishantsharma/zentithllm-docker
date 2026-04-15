@@ -4,6 +4,7 @@ import { mkdir, stat } from 'fs/promises';
 import path from 'path';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
+import { ModelAccessService } from '@/lib/database';
 import { getSessionUser } from '@/lib/session';
 
 export const runtime = 'nodejs';
@@ -15,6 +16,7 @@ type DownloadRequestBody = {
   revision?: string;
   targetName?: string;
   token?: string;
+  url?: string;
 };
 
 function sanitizeTargetName(name: string): string {
@@ -25,40 +27,96 @@ function isValidRepoId(value: string): boolean {
   return /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(value);
 }
 
+function isValidHuggingFaceUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === 'huggingface.co' && parsed.pathname.includes('/resolve/');
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !user.isAdmin) {
+  if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const body = (await req.json().catch(() => ({}))) as DownloadRequestBody;
-  const repoId = (body.repoId || '').trim();
-  const filename = (body.filename || '').trim();
-  const revision = (body.revision || 'main').trim() || 'main';
-  const token = (body.token || '').trim();
 
-  if (!repoId || !filename) {
-    return NextResponse.json({ error: 'repoId and filename are required' }, { status: 400 });
+  const canAccessModels = await ModelAccessService.canUserAccessModels({
+    userId: user.id,
+    email: user.email,
+    isAdmin: user.isAdmin,
+  });
+
+  if (!canAccessModels) {
+    return NextResponse.json({ error: 'You are not allowed to access model downloads' }, { status: 403 });
   }
 
-  if (!isValidRepoId(repoId)) {
+  const effectiveRateLimit = await ModelAccessService.getEffectiveRateLimit({
+    userId: user.id,
+    email: user.email,
+    isAdmin: user.isAdmin,
+  });
+
+  const rateCheck = await ModelAccessService.consumeRateLimit(
+    user.id,
+    effectiveRateLimit.limit,
+    effectiveRateLimit.windowMinutes
+  );
+
+  if (!rateCheck.allowed) {
     return NextResponse.json(
-      { error: 'repoId must be in format owner/model' },
-      { status: 400 }
+      {
+        error: `Rate limit reached. Try again after the current ${effectiveRateLimit.windowMinutes} minute window resets.`,
+      },
+      { status: 429 }
     );
   }
+  const repoId = (body.repoId || '').trim();
+  const filename = (body.filename || '').trim();
+  const revision = 'main';
+  const token = (body.token || '').trim();
+  const directUrl = (body.url || '').trim();
 
-  const safeTargetName = sanitizeTargetName((body.targetName || path.basename(filename)).trim() || 'model.gguf');
+  if (directUrl) {
+    const allowDirectHfUrl = await ModelAccessService.canUseDirectHuggingFaceUrl();
+    if (!allowDirectHfUrl) {
+      return NextResponse.json({ error: 'Direct Hugging Face URL downloads are disabled by admin policy' }, { status: 403 });
+    }
+  }
+
+  const safeTargetName = sanitizeTargetName((body.targetName || path.basename(filename || directUrl)).trim() || 'model.gguf');
   const modelsDir = path.join(process.cwd(), 'models');
   const targetPath = path.join(modelsDir, safeTargetName);
 
   try {
     await mkdir(modelsDir, { recursive: true });
 
-    const url = `https://huggingface.co/${encodeURIComponent(repoId).replace('%2F', '/')}/resolve/${encodeURIComponent(revision)}/${filename
-      .split('/')
-      .map((part) => encodeURIComponent(part))
-      .join('/')}`;
+    let url = directUrl;
+
+    if (url) {
+      if (!isValidHuggingFaceUrl(url)) {
+        return NextResponse.json({ error: 'url must be a valid huggingface.co resolve URL' }, { status: 400 });
+      }
+    } else {
+      if (!repoId || !filename) {
+        return NextResponse.json({ error: 'repoId and filename are required' }, { status: 400 });
+      }
+
+      if (!isValidRepoId(repoId)) {
+        return NextResponse.json(
+          { error: 'repoId must be in format owner/model' },
+          { status: 400 }
+        );
+      }
+
+      url = `https://huggingface.co/${encodeURIComponent(repoId).replace('%2F', '/')}/resolve/${encodeURIComponent(revision)}/${filename
+        .split('/')
+        .map((part) => encodeURIComponent(part))
+        .join('/')}`;
+    }
 
     const response = await fetch(url, {
       method: 'GET',

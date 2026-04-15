@@ -1,13 +1,12 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { AdminSidebar } from '@/components/admin/AdminSidebar';
-import { LocalModelsManager } from '@/components/admin/LocalModelsManager';
-import { ModelActionsFab } from '@/components/admin/ModelActionsFab';
+import { ModelsCatalogCard } from '@/components/admin/ModelsCatalogCard';
 import { getSessionUser } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
-export default async function AdminModelsPage() {
+export default async function AdminModelsDiscoverPage() {
   const sessionUser = await getSessionUser();
 
   if (!sessionUser) {
@@ -25,24 +24,22 @@ export default async function AdminModelsPage() {
       <main className="flex-1 flex flex-col min-w-0 bg-[#0d0d0d] relative overflow-hidden border border-white/10 m-[10px] rounded-2xl">
         <header className="h-14 flex items-center justify-between px-4 border-b border-white/5 bg-[#0d0d0d]/80 backdrop-blur-md sticky top-0 z-30">
           <div>
-            <h1 className="text-sm font-semibold text-white/90">Models</h1>
-            <p className="text-[11px] text-white/40">Local GGUF models</p>
+            <h1 className="text-sm font-semibold text-white/90">Discover Models</h1>
+            <p className="text-[11px] text-white/40">Find GGUF models from Hugging Face</p>
           </div>
           <Link
-            href="/chat"
+            href="/admin/models"
             className="text-xs px-3 py-1.5 rounded-lg border border-white/10 text-white/80 hover:text-white hover:bg-white/5 transition-colors"
           >
-            Back to Chat
+            Back to Local Models
           </Link>
         </header>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-            <LocalModelsManager />
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+            <ModelsCatalogCard />
           </div>
         </div>
-
-        <ModelActionsFab />
       </main>
     </div>
   );
