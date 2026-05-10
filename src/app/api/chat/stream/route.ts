@@ -3,6 +3,7 @@ import { getLlama, LlamaChatSession, type LlamaContext, type LlamaModel } from '
 import { stat } from 'fs/promises';
 import path from 'path';
 import { getSessionUser } from '@/lib/session';
+import { getKey } from '@/lib/keyv';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -285,18 +286,27 @@ export async function POST(req: NextRequest) {
         .filter((m: any) => ['system', 'user', 'assistant'].includes(m.role) && m.content.trim().length > 0)
     : [];
 
+  const modelPath = resolveModelPath(typeof body?.modelPath === 'string' ? body.modelPath : undefined);
+  let dbConfig: any = {};
+  if (modelPath) {
+    const modelName = path.basename(modelPath);
+    try {
+      dbConfig = await getKey(`model_config:local:${modelName}`) || {};
+    } catch(e) {}
+  }
+
   return streamChat(req, {
     prompt: typeof body?.prompt === 'string' ? body.prompt.trim() : '',
     messages: parsedMessages,
     requestId: typeof body?.requestId === 'string' && body.requestId.trim().length > 0
       ? body.requestId.trim()
       : globalThis.crypto.randomUUID(),
-    modelPath: resolveModelPath(typeof body?.modelPath === 'string' ? body.modelPath : undefined),
-    maxTokens: Number.isFinite(body?.maxTokens) ? Number(body.maxTokens) : 512,
-    temperature: Number.isFinite(body?.temperature) ? Number(body.temperature) : 0.7,
-    topP: Number.isFinite(body?.topP) ? Number(body.topP) : 0.9,
-    contextSize: Number.isFinite(body?.contextSize) ? Number(body.contextSize) : 1024,
-    batchSize: Number.isFinite(body?.batchSize) ? Number(body.batchSize) : 512,
+    modelPath,
+    maxTokens: dbConfig?.maxTokens || (Number.isFinite(body?.maxTokens) ? Number(body.maxTokens) : 512),
+    temperature: dbConfig?.temperature || (Number.isFinite(body?.temperature) ? Number(body.temperature) : 0.7),
+    topP: dbConfig?.topP || (Number.isFinite(body?.topP) ? Number(body.topP) : 0.9),
+    contextSize: dbConfig?.contextSize || (Number.isFinite(body?.contextSize) ? Number(body.contextSize) : 1024),
+    batchSize: dbConfig?.batchSize || (Number.isFinite(body?.batchSize) ? Number(body.batchSize) : 512),
   });
 }
 
@@ -308,15 +318,24 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
 
+  const modelPath = resolveModelPath(searchParams.get('modelPath') || undefined);
+  let dbConfig: any = {};
+  if (modelPath) {
+    const modelName = path.basename(modelPath);
+    try {
+      dbConfig = await getKey(`model_config:local:${modelName}`) || {};
+    } catch(e) {}
+  }
+
   return streamChat(req, {
     prompt: (searchParams.get('prompt') || '').trim(),
     messages: [],
     requestId: (searchParams.get('requestId') || globalThis.crypto.randomUUID()).trim(),
-    modelPath: resolveModelPath(searchParams.get('modelPath') || undefined),
-    maxTokens: Number(searchParams.get('maxTokens')) || 512,
-    temperature: Number(searchParams.get('temperature')) || 0.7,
-    topP: Number(searchParams.get('topP')) || 0.9,
-    contextSize: Number(searchParams.get('contextSize')) || 1024,
-    batchSize: Number(searchParams.get('batchSize')) || 512,
+    modelPath,
+    maxTokens: dbConfig?.maxTokens || Number(searchParams.get('maxTokens')) || 512,
+    temperature: dbConfig?.temperature || Number(searchParams.get('temperature')) || 0.7,
+    topP: dbConfig?.topP || Number(searchParams.get('topP')) || 0.9,
+    contextSize: dbConfig?.contextSize || Number(searchParams.get('contextSize')) || 1024,
+    batchSize: dbConfig?.batchSize || Number(searchParams.get('batchSize')) || 512,
   });
 }

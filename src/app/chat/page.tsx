@@ -19,8 +19,7 @@ import {
   X,
   Copy,
   Check,
-  RotateCcw,
-  ChevronDown
+  RotateCcw
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -66,6 +65,67 @@ type ModelOption = {
   description?: string;
 };
 
+type ParsedAssistantMessage = {
+  thought: string;
+  response: string;
+  hasOpenThought: boolean;
+};
+
+function parseAssistantMessage(content: string): ParsedAssistantMessage {
+  const thoughtParts: string[] = [];
+
+  let response = content.replace(/<think>([\s\S]*?)<\/think>/gi, (_, thoughtContent: string) => {
+    thoughtParts.push(thoughtContent);
+    return '';
+  });
+
+  let hasOpenThought = false;
+  let openThought = '';
+  const lowerResponse = response.toLowerCase();
+  const openTag = '<think>';
+  const lastOpenTagIndex = lowerResponse.lastIndexOf(openTag);
+
+  if (lastOpenTagIndex !== -1) {
+    const closeTagIndex = lowerResponse.indexOf('</think>', lastOpenTagIndex);
+    if (closeTagIndex === -1) {
+      hasOpenThought = true;
+      openThought = response.slice(lastOpenTagIndex + openTag.length);
+      response = response.slice(0, lastOpenTagIndex);
+    }
+  }
+
+  response = response.replace(/<\/?think>/gi, '').trim();
+
+  const thought = [...thoughtParts, openThought]
+    .join('')
+    .trim();
+
+  return {
+    thought,
+    response,
+    hasOpenThought,
+  };
+}
+
+function toDisplayTextFromStreamItem(item: any): string {
+  if (typeof item === 'string') {
+    return item;
+  }
+
+  const segmentType = typeof item?.segmentType === 'string' ? item.segmentType.toLowerCase() : '';
+  const text = typeof item?.text === 'string' ? item.text : '';
+
+  if (!text) {
+    return '';
+  }
+
+  if (segmentType === 'thought') {
+    return `<think>${text}</think>`;
+  }
+
+  return text;
+}
+
 export default function ChatPage() {
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -82,9 +142,15 @@ export default function ChatPage() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string>('');
   const [modelsError, setModelsError] = useState<string>('');
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [chunkCount, setChunkCount] = useState(0);
+  const [streamingText, setStreamingText] = useState('');
+  const [streamingThoughtText, setStreamingThoughtText] = useState('');
+  const [completedThought, setCompletedThought] = useState<{ id: string; text: string } | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const completedThoughtTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getNowConversationGroup = (): string => 'Today';
 
@@ -274,6 +340,13 @@ export default function ChatPage() {
     const content = customContent || inputValue;
     if (!content.trim()) return;
 
+    if (completedThoughtTimeoutRef.current) {
+      clearTimeout(completedThoughtTimeoutRef.current);
+      completedThoughtTimeoutRef.current = null;
+    }
+
+    setCompletedThought(null);
+
     const isLocalModel = selectedModelId.startsWith('local:');
     const localModelName = isLocalModel ? selectedModelId.replace(/^local:/, '') : '';
     const modelPath = isLocalModel ? `models/${localModelName}` : null;
@@ -322,27 +395,28 @@ export default function ChatPage() {
 
     const assistantId = (Date.now() + 1).toString();
     let assistantText = '';
-    let assistantCreated = false;
+    setStreamingMessageId(assistantId);
+    setChunkCount(0);
+    setStreamingText('');
+    setStreamingThoughtText('');
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        senderName: 'Nexus AI',
+        content: '',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        avatar: 'https://picsum.photos/seed/ai/100/100',
+      },
+    ]);
 
     const appendAssistantChunk = (chunk: string) => {
       if (!chunk) return;
       assistantText += chunk;
-
-      if (!assistantCreated) {
-        assistantCreated = true;
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: assistantId,
-            role: 'assistant',
-            senderName: 'Nexus AI',
-            content: assistantText,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            avatar: 'https://picsum.photos/seed/ai/100/100',
-          },
-        ]);
-        return;
-      }
+      setStreamingText(assistantText);
+      setChunkCount(prev => prev + 1);
 
       setMessages((prev) =>
         prev.map((message) =>
@@ -381,68 +455,118 @@ export default function ChatPage() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let pendingEventType = '';
+
+      const processSseData = (eventType: string, dataLine: string) => {
+        if (!dataLine) return;
+
+  let payload: any;
+  try {
+    payload = JSON.parse(dataLine);
+  } catch {
+    return;
+  }
+
+        const resolvedEventType = String(payload?.type || eventType || '').toLowerCase();
+       
+        const chunk = payload?.chunk;
+  const hasChunkPayload = !!chunk && typeof chunk === 'object';
+  const chunkText = hasChunkPayload
+    ? toDisplayTextFromStreamItem(chunk)
+    : (typeof payload?.text === 'string' ? payload.text : ''); // Handle flat text payloads
+
+  if (resolvedEventType === 'chunk' || chunkText) {
+    setChunkCount((prev) => prev + 1);
+
+    // 2. Update the local accumulator variable
+    assistantText += chunkText; 
+    
+    // 3. Update the UI states
+    setStreamingText(assistantText);
+
+    // 4. Update the messages array IMMEDIATELY
+    setMessages((prev) =>
+      prev.map((message) =>
+        message.id === assistantId
+          ? { ...message, content: assistantText }
+          : message
+      )
+    );
+
+    // Handle thought tracking
+    const isThoughtChunk = hasChunkPayload && 
+      chunk?.segmentType?.toLowerCase() === 'thought';
+    if (isThoughtChunk) {
+      setStreamingThoughtText((prev) => prev + chunkText);
+    }
+  }
+
+        if (resolvedEventType === 'done' && !assistantText) {
+          const responseItems = Array.isArray(payload?.response) ? payload.response : [];
+          const fallbackText = responseItems
+            .map((item: any) => toDisplayTextFromStreamItem(item))
+            .join('');
+          appendAssistantChunk(fallbackText || 'Done.');
+        }
+
+        if (resolvedEventType === 'error') {
+          throw new Error(String(payload?.error || 'Local model stream failed'));
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() || '';
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
 
-        for (const eventChunk of events) {
-          const lines = eventChunk.split('\n');
-          const eventType = lines.find((line) => line.startsWith('event:'))?.replace('event:', '').trim();
-          const dataLine = lines.find((line) => line.startsWith('data:'))?.replace('data:', '').trim();
-          if (!dataLine) continue;
+        for (const rawLine of lines) {
+          const line = rawLine.trimEnd();
 
-          let payload: any;
-          try {
-            payload = JSON.parse(dataLine);
-          } catch {
+          if (!line) {
+            pendingEventType = '';
             continue;
           }
 
-          if (eventType === 'chunk') {
-            appendAssistantChunk(String(payload?.chunk?.text || ''));
+          if (line.startsWith('event:')) {
+            pendingEventType = line.slice('event:'.length).trim();
+            continue;
           }
 
-          if (eventType === 'done' && !assistantCreated) {
-            const responseItems = Array.isArray(payload?.response) ? payload.response : [];
-            const fallbackText = responseItems
-              .map((item: any) => {
-                if (typeof item === 'string') return item;
-                if (item && typeof item === 'object' && 'text' in item) return String(item.text || '');
-                return '';
-              })
-              .join('');
-            appendAssistantChunk(fallbackText || 'Done.');
-          }
-
-          if (eventType === 'error') {
-            throw new Error(String(payload?.error || 'Local model stream failed'));
+          if (line.startsWith('data:')) {
+            const dataLine = line.slice('data:'.length).trim();
+            processSseData(pendingEventType, dataLine);
           }
         }
       }
     } catch (error: any) {
       const message = String(error?.message || 'Failed to generate response');
-      if (!assistantCreated) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: assistantId,
-            role: 'assistant',
-            senderName: 'Nexus AI',
-            content: `Error: ${message}`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            avatar: 'https://picsum.photos/seed/ai/100/100',
-          },
-        ]);
-      } else {
-        appendAssistantChunk(`\n\nError: ${message}`);
-      }
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === assistantId
+            ? {
+                ...item,
+                content: assistantText ? `${assistantText}\n\nError: ${message}` : `Error: ${message}`,
+              }
+            : item
+        )
+      );
     } finally {
+      const finalThoughtText = streamingThoughtText || '';
+      if (finalThoughtText) {
+        setCompletedThought({ id: assistantId, text: finalThoughtText });
+        completedThoughtTimeoutRef.current = setTimeout(() => {
+          setCompletedThought((current) => (current?.id === assistantId ? null : current));
+          completedThoughtTimeoutRef.current = null;
+        }, 3000);
+      }
+
       setIsTyping(false);
+      setStreamingMessageId(null);
+      setStreamingText('');
+      setStreamingThoughtText(finalThoughtText);
     }
   };
 
@@ -608,7 +732,7 @@ export default function ChatPage() {
           ref={scrollRef}
           className="flex-1 overflow-y-auto custom-scrollbar"
         >
-          <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-8 sm:space-y-10">
+          <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-5 sm:space-y-6">
             {messages.length === 0 ? (
               <div className="h-[60vh] flex flex-col items-center justify-center text-center px-4">
                 <div className="h-12 w-12 rounded-full border border-white/10 flex items-center justify-center mb-6">
@@ -620,6 +744,20 @@ export default function ChatPage() {
               messages.map((msg, index) => {
                 const isAI = msg.role === 'assistant';
                 const isLast = index === messages.length - 1;
+                const parsedAssistant = isAI ? parseAssistantMessage(msg.content) : null;
+                const visibleMessageContent = isAI && parsedAssistant
+                  ? parsedAssistant.response
+                  : msg.content;
+                const thoughtContent = isAI && parsedAssistant
+                  ? parsedAssistant.thought
+                  : '';
+                const isStreamingPlaceholder = isAI && isLast && streamingMessageId === msg.id && !visibleMessageContent;
+                const isThoughtActive = isAI && (streamingMessageId === msg.id || completedThought?.id === msg.id);
+                const thoughtLabel = streamingMessageId === msg.id
+                  ? 'Thinking...'
+                  : completedThought?.id === msg.id
+                    ? 'Thought complete'
+                    : 'Thought';
 
                 return (
                   <div key={msg.id} className="animate-fade-in group">
@@ -632,7 +770,7 @@ export default function ChatPage() {
                         <AvatarFallback>{isAI ? 'AI' : 'U'}</AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0 pt-0.5">
-                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <div className="flex items-center gap-2 flex-wrap mb-0.5">
                           <p className="text-xs sm:text-sm font-bold text-white">
                             {isAI ? 'Nexus AI' : userDisplayName}
                           </p>
@@ -646,62 +784,101 @@ export default function ChatPage() {
                             </span>
                           )}
                         </div>
-                        
-                        <div className="text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words markdown-content">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm, remarkMath]}
-                            rehypePlugins={[rehypeKatex]}
-                            components={{
-                              code({ node, inline, className, children, ...props }: any) {
-                                const match = /language-(\w+)/.exec(className || '');
-                                return !inline && match ? (
-                                  <div className="relative group/code my-4">
-                                    <div className="flex items-center justify-between px-4 py-2 bg-[#1e1e1e] rounded-t-lg border-x border-t border-white/5">
-                                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{match[1]}</span>
-                                      <Button 
-                                        variant="ghost" 
-                                        size="icon" 
-                                        className="h-6 w-6 text-white/40 hover:text-white"
-                                        onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), msg.id)}
-                                      >
-                                        {copiedId === msg.id ? <Check size={12} /> : <Copy size={12} />}
-                                      </Button>
-                                    </div>
-                                    <SyntaxHighlighter
-                                      style={vscDarkPlus}
-                                      language={match[1]}
-                                      PreTag="div"
-                                      className="!m-0 !rounded-b-lg !bg-[#0d0d0d] !border-x !border-b !border-white/5 !p-4 custom-scrollbar"
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, '')}
-                                    </SyntaxHighlighter>
-                                  </div>
-                                ) : (
-                                  <code className={cn("bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-white", className)} {...props}>
-                                    {children}
-                                  </code>
-                                );
-                              },
-                              p: ({ children }) => <p className="mb-4 last:mb-0">{children}</p>,
-                              ul: ({ children }) => <ul className="list-disc pl-6 mb-4 space-y-1">{children}</ul>,
-                              ol: ({ children }) => <ol className="list-decimal pl-6 mb-4 space-y-1">{children}</ol>,
-                              h1: ({ children }) => <h1 className="text-xl font-bold mb-4 mt-6">{children}</h1>,
-                              h2: ({ children }) => <h2 className="text-lg font-bold mb-3 mt-5">{children}</h2>,
-                              h3: ({ children }) => <h3 className="text-md font-bold mb-2 mt-4">{children}</h3>,
-                              blockquote: ({ children }) => <blockquote className="border-l-4 border-white/10 pl-4 italic my-4">{children}</blockquote>,
-                            }}
-                          >
-                            {msg.content}
-                          </ReactMarkdown>
-                        </div>
 
-                        <div className="mt-3 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                        {isAI && thoughtContent && (
+                          <details
+                            className="mb-2 rounded-xl border border-border/60 bg-muted/40 p-3"
+                            open={isThoughtActive}
+                          >
+                            <summary className="cursor-pointer select-none text-xs font-semibold text-muted-foreground">
+                              {thoughtLabel}{streamingMessageId === msg.id ? ' (live)' : completedThought?.id === msg.id ? ' (3s)' : ''}
+                            </summary>
+                            <div className="mt-2 text-xs leading-5 text-foreground/90 whitespace-pre-wrap">
+                              {thoughtContent}
+                            </div>
+                          </details>
+                        )}
+
+                        {isStreamingPlaceholder ? (
+                          <div className={cn(
+                            "text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words markdown-content p-3 rounded-lg transition-all",
+                            streamingMessageId === msg.id ? "bg-white/5 border border-white/10 min-h-[48px] flex items-center" : ""
+                          )}>
+                             <span className="inline-block w-2 h-5 bg-white ml-1 animate-pulse rounded-sm" />
+                          </div>
+                        ) : (visibleMessageContent || streamingMessageId === msg.id) ? (
+                          <div className={cn(
+                            "text-sm sm:text-[15px] leading-6 sm:leading-7 text-white/90 whitespace-pre-wrap break-words markdown-content p-3 rounded-lg transition-all",
+                            streamingMessageId === msg.id ? "bg-white/5 border border-white/10" : ""
+                          )}>
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm, remarkMath]}
+                              rehypePlugins={[rehypeKatex]}
+                              components={{
+                                code({ node, inline, className, children, ...props }: any) {
+                                  const match = /language-(\w+)/.exec(className || '');
+                                  return !inline && match ? (
+                                    <div className="relative group/code my-4">
+                                      <div className="flex items-center justify-between px-4 py-2 bg-[#1e1e1e] rounded-t-lg border-x border-t border-white/5">
+                                        <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">{match[1]}</span>
+                                        <Button 
+                                          variant="ghost" 
+                                          size="icon" 
+                                          className="h-6 w-6 text-white/40 hover:text-white"
+                                          onClick={() => copyToClipboard(String(children).replace(/\n$/, ''), msg.id)}
+                                        >
+                                          {copiedId === msg.id ? <Check size={12} /> : <Copy size={12} />}
+                                        </Button>
+                                      </div>
+                                      <SyntaxHighlighter
+                                        style={vscDarkPlus}
+                                        language={match[1]}
+                                        PreTag="div"
+                                        className="!m-0 !rounded-b-lg !bg-[#0d0d0d] !border-x !border-b !border-white/5 !p-4 custom-scrollbar"
+                                        {...props}
+                                      >
+                                        {String(children).replace(/\n$/, '')}
+                                      </SyntaxHighlighter>
+                                    </div>
+                                  ) : (
+                                    <code className={cn("bg-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-white", className)} {...props}>
+                                      {children}
+                                    </code>
+                                  );
+                                },
+                                p: ({ children }) => <p className="mb-4 last:mb-0">{children}</p>,
+                                ul: ({ children }) => <ul className="list-disc pl-6 mb-4 space-y-1">{children}</ul>,
+                                ol: ({ children }) => <ol className="list-decimal pl-6 mb-4 space-y-1">{children}</ol>,
+                                h1: ({ children }) => <h1 className="text-xl font-bold mb-4 mt-6">{children}</h1>,
+                                h2: ({ children }) => <h2 className="text-lg font-bold mb-3 mt-5">{children}</h2>,
+                                h3: ({ children }) => <h3 className="text-md font-bold mb-2 mt-4">{children}</h3>,
+                                blockquote: ({ children }) => <blockquote className="border-l-4 border-white/10 pl-4 italic my-4">{children}</blockquote>,
+                              }}
+                            >
+                              {visibleMessageContent}
+                            </ReactMarkdown>
+                            {streamingMessageId === msg.id && (
+                              <span className="inline-block w-2 h-5 bg-white ml-1 animate-pulse rounded-sm" />
+                            )}
+                          </div>
+                        ) : null}
+
+                        <div className="mt-2 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          {streamingMessageId === msg.id && (
+                            <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold text-white/60 bg-white/5 rounded-full">
+                              <div className="flex gap-0.5">
+                                <div className="w-1 h-1 rounded-full bg-white/60 animate-bounce" style={{ animationDelay: '0s' }} />
+                                <div className="w-1 h-1 rounded-full bg-white/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                <div className="w-1 h-1 rounded-full bg-white/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+                              </div>
+                              <span>Streaming ({chunkCount})</span>
+                            </div>
+                          )}
                           <Button 
                             variant="ghost" 
                             size="icon" 
                             className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white"
-                            onClick={() => copyToClipboard(msg.content, msg.id, true)}
+                            onClick={() => copyToClipboard(visibleMessageContent || msg.content, msg.id, true)}
                           >
                             {msgCopiedId === msg.id ? <Check size={13} /> : <Copy size={13} />}
                           </Button>
@@ -719,30 +896,12 @@ export default function ChatPage() {
                           <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-white">
                             <Share2 size={13} />
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-7 w-7 sm:h-8 sm:w-8 text-white/30 hover:text-destructive"
-                            onClick={() => setMessages(prev => prev.filter(m => m.id !== msg.id))}
-                          >
-                            <Trash2 size={13} />
-                          </Button>
                         </div>
                       </div>
                     </div>
                   </div>
                 )
               })
-            )}
-
-            {isTyping && (
-              <div className="flex items-start gap-3 sm:gap-4 animate-pulse">
-                <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-[#19c37d] shrink-0" />
-                <div className="flex-1 pt-2 space-y-2">
-                  <div className="h-3 w-20 sm:w-24 bg-white/10 rounded" />
-                  <div className="h-3 w-full bg-white/5 rounded" />
-                </div>
-              </div>
             )}
           </div>
         </div>
@@ -788,8 +947,9 @@ export default function ChatPage() {
                       ? "bg-white text-black hover:bg-white/90" 
                       : "bg-white/10 text-white/20"
                   )}
+                  aria-label={isTyping ? 'Sending message' : 'Send message'}
                 >
-                  <Send size={16} />
+                  {isTyping ? <RotateCcw size={16} className="animate-spin" /> : <Send size={16} />}
                 </Button>
               </div>
             </div>

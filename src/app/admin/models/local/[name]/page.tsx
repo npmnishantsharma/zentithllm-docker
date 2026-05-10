@@ -6,6 +6,7 @@ import { AdminSidebar } from '@/components/admin/AdminSidebar';
 import { LocalModelEditor } from '@/components/admin/LocalModelEditor';
 import { ModelAccessManager } from '@/components/admin/ModelAccessManager';
 import { getSessionUser } from '@/lib/session';
+import { getKey } from '@/lib/keyv';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,7 @@ type LocalModelEntry = {
   sizeBytes: number;
   sizeReadable: string;
   modifiedAt: string;
+  settings: any;
 };
 
 function formatBytes(bytes: number): string {
@@ -38,11 +40,14 @@ async function getLocalModel(name: string): Promise<LocalModelEntry | null> {
 
   const filePath = path.join(modelsDir, match.name);
   const fileStat = await stat(filePath);
+  const settings = await getKey(`model_config:local:${match.name}`) || {};
+
   return {
     name: match.name,
     sizeBytes: fileStat.size,
     sizeReadable: formatBytes(fileStat.size),
     modifiedAt: fileStat.mtime.toISOString(),
+    settings,
   };
 }
 

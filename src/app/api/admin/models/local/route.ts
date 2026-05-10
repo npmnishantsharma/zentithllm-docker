@@ -3,6 +3,8 @@ import { readdir, stat, unlink, rename } from 'fs/promises';
 import path from 'path';
 import { getSessionUser } from '@/lib/session';
 
+import { setKey } from '@/lib/keyv';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -119,6 +121,32 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: true, renamed: { from: currentName, to: newName } });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Failed to rename local model' }, { status: 500 });
+  }
+}
+
+export async function PUT(req: NextRequest) {
+  const user = await getSessionUser();
+  if (!user || !user.isAdmin) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const name = (body.name || '').trim();
+  const settings = body.settings;
+
+  if (!name || !settings) {
+    return NextResponse.json({ error: 'name and settings are required' }, { status: 400 });
+  }
+
+  if (!isSafeFileName(name)) {
+    return NextResponse.json({ error: 'Invalid file name' }, { status: 400 });
+  }
+
+  try {
+    await setKey(`model_config:local:${name}`, settings);
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || 'Failed to save model settings' }, { status: 500 });
   }
 }
 
